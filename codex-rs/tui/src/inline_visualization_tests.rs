@@ -349,6 +349,37 @@ fn rich_agent_cell_replaces_adjacent_d2_artifact_without_rewriting_raw_history()
 }
 
 #[test]
+fn rich_agent_cell_replaces_adjacent_mermaid_artifact() {
+    let (_codex_home, context) = context_with_image("sequence.png");
+    let source = "Before\n\n```mermaid\nsequenceDiagram\n  user->>agent: request\n```\n::codex-inline-vis{file=\"sequence.png\"}\n\nAfter\n";
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.to_string(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rendered = cell
+        .display_hyperlink_lines(/*width*/ 40)
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    "<image row; uploads PNG>".to_string()
+                } else {
+                    "<image row>".to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!("inline_mermaid_artifact_renders_inline", rendered);
+}
+
+#[test]
 fn standalone_png_directive_uses_the_skill_output_contract() {
     let (_codex_home, context) = context_with_image("diagram.png");
     let source = "Rendered and verified.\n\n::codex-inline-vis{file=\"diagram.png\"}";

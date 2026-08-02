@@ -426,7 +426,9 @@ fn is_artifact_language(language: &str) -> bool {
         .split([',', ' ', '\t'])
         .next()
         .is_some_and(|language| {
-            language.eq_ignore_ascii_case("d2") || language.eq_ignore_ascii_case("latex")
+            language.eq_ignore_ascii_case("d2")
+                || language.eq_ignore_ascii_case("mermaid")
+                || language.eq_ignore_ascii_case("latex")
         })
 }
 
