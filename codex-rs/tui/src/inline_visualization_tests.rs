@@ -43,24 +43,15 @@ fn context_with_png() -> (TempDir, InlineVisualizationContext) {
 }
 
 #[test]
-fn granted_visualization_root_overrides_thread_id_derived_root() {
+fn workspace_root_is_used_for_artifacts() {
     let codex_home = tempfile::tempdir().expect("temp codex home");
-    let granted_context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
-        .expect("granted context");
-    fs::create_dir_all(&granted_context.thread_dir).expect("create granted directory");
-    fs::write(
-        granted_context.thread_dir.join("chart.html"),
-        "<div>chart</div>",
-    )
-    .expect("write fragment");
+    let workspace = tempfile::tempdir().expect("workspace");
+    fs::write(workspace.path().join("chart.html"), "<div>chart</div>").expect("write fragment");
 
-    let context = InlineVisualizationContext::new_with_writable_roots(
-        codex_home.path(),
-        ThreadId::new(),
-        [granted_context.thread_dir.as_path()],
-    )
-    .expect("context");
+    let context = InlineVisualizationContext::from_workspace(codex_home.path(), workspace.path())
+        .expect("context");
 
+    assert_eq!(context.thread_dir, workspace.path());
     assert!(context.link_for("chart.html").is_some());
 }
 

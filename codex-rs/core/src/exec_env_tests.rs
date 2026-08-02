@@ -41,31 +41,6 @@ fn inject_permission_profile_env_removes_stale_value_without_active_profile() {
     assert_eq!(env.get(CODEX_PERMISSION_PROFILE_ENV_VAR), None);
 }
 
-#[tokio::test]
-async fn inject_visualization_dir_env_uses_the_enabled_thread_root() {
-    let codex_home = tempfile::tempdir().expect("codex home");
-    let mut config = crate::config::ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("test config");
-    config
-        .features
-        .enable(codex_features::Feature::Artifact)
-        .expect("enable artifact feature");
-    let thread_id = ThreadId::new();
-    let visualization_dir =
-        codex_protocol::visualization::thread_visualization_dir(codex_home.path(), thread_id)
-            .expect("visualization directory");
-    std::fs::create_dir_all(&visualization_dir).expect("create visualization directory");
-    let mut env = HashMap::new();
-
-    inject_visualization_dir_env(&mut env, &config, thread_id);
-
-    let expected = visualization_dir.to_string_lossy().into_owned();
-    assert_eq!(env.get(CODEX_VISUALIZATION_DIR_ENV_VAR), Some(&expected));
-}
-
 #[cfg(target_os = "windows")]
 #[test]
 fn inject_permission_profile_env_replaces_differently_cased_windows_key() {

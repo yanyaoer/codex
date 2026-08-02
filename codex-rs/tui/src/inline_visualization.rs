@@ -4,8 +4,8 @@ mod viewer;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::DateTime;
 use codex_protocol::ThreadId;
-use codex_protocol::visualization::thread_visualization_dir;
 use pulldown_cmark::Event;
 use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
@@ -51,41 +51,30 @@ pub(crate) struct ValidatedVisualizationImage {
 
 impl InlineVisualizationContext {
     pub(crate) fn new(codex_home: &Path, thread_id: ThreadId) -> Option<Self> {
-        Self::new_with_writable_roots(codex_home, thread_id, std::iter::empty())
+        Some(Self {
+            visualizations_dir: codex_home.join("visualizations"),
+            thread_dir: thread_visualization_dir(codex_home, thread_id)?,
+            preview_cache_dir: codex_home.join("cache").join("tui-visualizations"),
+        })
     }
 
     pub(crate) fn from_config(
         config: &crate::legacy_core::config::Config,
         thread_id: ThreadId,
     ) -> Option<Self> {
-        let writable_roots = config
-            .permissions
-            .file_system_sandbox_policy()
-            .get_writable_roots_with_cwd(config.cwd.as_path());
-        Self::new_with_writable_roots(
-            config.codex_home.as_path(),
-            thread_id,
-            writable_roots.iter().map(|root| root.root.as_path()),
-        )
+        if config.features.enabled(codex_features::Feature::Artifact) {
+            return Self::from_workspace(config.codex_home.as_path(), config.cwd.as_path());
+        }
+        Self::new(config.codex_home.as_path(), thread_id)
     }
 
-    fn new_with_writable_roots<'a>(
-        codex_home: &Path,
-        thread_id: ThreadId,
-        writable_roots: impl IntoIterator<Item = &'a Path>,
-    ) -> Option<Self> {
-        let visualizations_dir = codex_home.join("visualizations");
-        let granted_thread_dirs = writable_roots
-            .into_iter()
-            .filter(|root| is_visualization_thread_dir(&visualizations_dir, root))
-            .collect::<Vec<_>>();
-        let thread_dir = match granted_thread_dirs.as_slice() {
-            [thread_dir] => (*thread_dir).to_path_buf(),
-            _ => thread_visualization_dir(codex_home, thread_id)?,
-        };
+    fn from_workspace(codex_home: &Path, workspace_dir: &Path) -> Option<Self> {
+        if !workspace_dir.is_absolute() {
+            return None;
+        }
         Some(Self {
-            visualizations_dir,
-            thread_dir,
+            visualizations_dir: workspace_dir.to_path_buf(),
+            thread_dir: workspace_dir.to_path_buf(),
             preview_cache_dir: codex_home.join("cache").join("tui-visualizations"),
         })
     }
@@ -199,19 +188,17 @@ fn single_file(file: &str) -> Option<&Path> {
     .then_some(relative)
 }
 
-fn is_visualization_thread_dir(visualizations_dir: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(visualizations_dir) else {
-        return false;
-    };
-    let components = relative.components().collect::<Vec<_>>();
-    matches!(
-        components.as_slice(),
-        [
-            Component::Normal(_),
-            Component::Normal(_),
-            Component::Normal(_),
-            Component::Normal(thread_id)
-        ] if Uuid::parse_str(&thread_id.to_string_lossy()).is_ok()
+fn thread_visualization_dir(codex_home: &Path, thread_id: ThreadId) -> Option<PathBuf> {
+    let thread_id = thread_id.to_string();
+    let uuid = Uuid::parse_str(&thread_id).ok()?;
+    let timestamp = uuid.get_timestamp()?;
+    let (seconds, nanos) = timestamp.to_unix();
+    let created_at = DateTime::from_timestamp(i64::try_from(seconds).ok()?, nanos)?;
+    Some(
+        codex_home
+            .join("visualizations")
+            .join(created_at.format("%Y/%m/%d").to_string())
+            .join(thread_id),
     )
 }
 

@@ -6,7 +6,6 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
-use crate::exec_env::CODEX_VISUALIZATION_DIR_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -268,11 +267,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
-    for key in [
-        CODEX_THREAD_ID_ENV_VAR,
-        CODEX_PERMISSION_PROFILE_ENV_VAR,
-        CODEX_VISUALIZATION_DIR_ENV_VAR,
-    ] {
+    for key in [CODEX_THREAD_ID_ENV_VAR, CODEX_PERMISSION_PROFILE_ENV_VAR] {
         if let Some(value) = env.get(key) {
             override_env.insert(key.to_string(), value.clone());
         }
