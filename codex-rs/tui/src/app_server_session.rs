@@ -6,6 +6,7 @@
 mod fs;
 
 use crate::bottom_pane::FeedbackAudience;
+use crate::inline_visualization::inline_visualization_compiler_tool_spec;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
 use crate::service_tier_resolution;
@@ -108,6 +109,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -1533,6 +1535,10 @@ fn thread_start_params_from_config(
         developer_instructions: with_terminal_visualization_instructions(
             config, /*control_instructions*/ None,
         ),
+        dynamic_tools: config
+            .features
+            .enabled(Feature::Artifact)
+            .then(|| vec![inline_visualization_compiler_tool_spec()]),
         ..ThreadStartParams::default()
     }
 }
@@ -2615,6 +2621,7 @@ mod tests {
         );
 
         assert_eq!(control_start.developer_instructions, None);
+        assert_eq!(control_start.dynamic_tools, None);
         assert_eq!(control_resume.developer_instructions, None);
         assert_eq!(
             control_fork.developer_instructions.as_deref(),
@@ -2652,6 +2659,7 @@ mod tests {
             treatment_start.developer_instructions.as_deref(),
             Some(expected.as_str())
         );
+        assert_eq!(treatment_start.dynamic_tools, None);
         assert_eq!(
             treatment_resume.developer_instructions.as_deref(),
             Some(expected.as_str())
@@ -2677,6 +2685,10 @@ mod tests {
         assert_eq!(
             artifact_start.developer_instructions.as_deref(),
             Some(expected.as_str())
+        );
+        assert_eq!(
+            artifact_start.dynamic_tools,
+            Some(vec![inline_visualization_compiler_tool_spec()])
         );
     }
 

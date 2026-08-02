@@ -1,5 +1,6 @@
 //! Render-only handling for assistant-authored inline visualization artifacts.
 
+mod compiler_tool;
 mod diagram;
 mod formula;
 mod native;
@@ -7,6 +8,12 @@ mod png_cache;
 mod setup;
 mod viewer;
 
+pub(crate) use compiler_tool::INLINE_VISUALIZATION_MAX_RETRIES;
+pub(crate) use compiler_tool::INLINE_VISUALIZATION_TOOL_NAME;
+pub(crate) use compiler_tool::InlineVisualizationCompileArgs;
+pub(crate) use compiler_tool::compile_inline_visualization;
+pub(crate) use compiler_tool::inline_visualization_compiler_tool_spec;
+pub(crate) use compiler_tool::inline_visualization_error_response;
 pub use setup::InlineVisualizationSetupReport;
 pub use setup::setup_inline_visualizations;
 
@@ -333,6 +340,19 @@ impl InlineVisualizationContext {
 
     pub(crate) async fn render_native_artifacts(&self, markdown: &str) -> usize {
         native::render_artifacts(self, markdown).await
+    }
+
+    pub(crate) async fn compile_native_artifact(
+        &self,
+        format: &str,
+        source: String,
+    ) -> anyhow::Result<String> {
+        let format = native::format_from_language(format)
+            .ok_or_else(|| anyhow::anyhow!("unsupported inline visualization format"))?;
+        let artifact = native::NativeArtifact { format, source };
+        native::compile_artifact(self, &artifact)
+            .await
+            .map(|(file, _created)| file)
     }
 }
 

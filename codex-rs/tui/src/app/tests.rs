@@ -4065,6 +4065,99 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
 }
 
 #[tokio::test]
+async fn inline_visualization_dynamic_tool_request_is_handled_by_the_tui() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    app.config
+        .features
+        .enable(Feature::Artifact)
+        .expect("artifact feature should be enableable");
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    let request_id = AppServerRequestId::Integer(99);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+            ServerRequest::DynamicToolCall {
+                request_id: request_id.clone(),
+                params: codex_app_server_protocol::DynamicToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-inline-viz".to_string(),
+                    call_id: "call-inline-viz".to_string(),
+                    namespace: None,
+                    tool: crate::inline_visualization::INLINE_VISUALIZATION_TOOL_NAME.to_string(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        )),
+    )
+    .await;
+
+    let AppEvent::InlineVisualizationCompileFinished {
+        request_id: actual_request_id,
+        response,
+    } = app_event_rx
+        .try_recv()
+        .expect("compiler response should be queued")
+    else {
+        panic!("expected inline visualization compiler response");
+    };
+    assert_eq!(actual_request_id, request_id);
+    assert!(!response.success);
+    assert!(app.chat_widget.active_cell_transcript_lines(120).is_none());
+}
+
+#[tokio::test]
+async fn persisted_inline_visualization_tool_fails_cleanly_when_feature_is_disabled() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let request_id = AppServerRequestId::Integer(100);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+            ServerRequest::DynamicToolCall {
+                request_id: request_id.clone(),
+                params: codex_app_server_protocol::DynamicToolCallParams {
+                    thread_id: ThreadId::new().to_string(),
+                    turn_id: "turn-inline-viz-disabled".to_string(),
+                    call_id: "call-inline-viz-disabled".to_string(),
+                    namespace: None,
+                    tool: crate::inline_visualization::INLINE_VISUALIZATION_TOOL_NAME.to_string(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        )),
+    )
+    .await;
+
+    let AppEvent::InlineVisualizationCompileFinished {
+        request_id: actual_request_id,
+        response,
+    } = app_event_rx
+        .try_recv()
+        .expect("disabled compiler response should be queued")
+    else {
+        panic!("expected disabled inline visualization compiler response");
+    };
+    assert_eq!(actual_request_id, request_id);
+    assert!(!response.success);
+    let [codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText { text }] =
+        response.content_items.as_slice()
+    else {
+        panic!("disabled compiler should return one text diagnostic");
+    };
+    assert!(text.contains("inline visualization feature is disabled"));
+    assert!(app.chat_widget.active_cell_transcript_lines(120).is_none());
+}
+
+#[tokio::test]
 async fn primary_thread_ignores_child_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}

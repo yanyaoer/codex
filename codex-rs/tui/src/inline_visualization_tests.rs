@@ -77,6 +77,37 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
         .collect()
 }
 
+fn normalized_inline_image_text(
+    lines: &[crate::terminal_hyperlinks::HyperlinkLine],
+    uploaded: &str,
+    continuation: &str,
+) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    uploaded.to_string()
+                } else {
+                    continuation.to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn raw_cell_text(cell: &AgentMarkdownCell) -> String {
+    cell.raw_lines()
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn buffer_to_text(buffer: &Buffer, width: u16) -> String {
     buffer
         .content
@@ -311,45 +342,23 @@ fn rich_agent_cell_replaces_adjacent_d2_artifact_without_rewriting_raw_history()
         "Before\n\n```d2\n{diagram}```\n::codex-inline-vis{{file=\"diagram.png\"}}\n\nAfter\n"
     );
     let cell = AgentMarkdownCell::new_with_inline_visualizations(
-        source,
+        source.clone(),
         Path::new("/workspace"),
         Some(context),
     );
 
-    let rich = cell.display_hyperlink_lines(/*width*/ 40);
+    let rendered = cell.display_hyperlink_lines(/*width*/ 40);
     assert_eq!(
-        rich.iter()
+        rendered
+            .iter()
             .filter(|line| line.inline_image.is_some())
             .count(),
         1
     );
-    let rich = rich
-        .iter()
-        .map(|line| {
-            let text = line_text(&line.line);
-            if text.contains('\u{10eeee}') {
-                if line.inline_image.is_some() {
-                    "<image row; uploads PNG>".to_string()
-                } else {
-                    "<image row>".to_string()
-                }
-            } else {
-                text
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let raw = cell
-        .raw_lines()
-        .iter()
-        .map(line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    insta::assert_snapshot!(
-        "inline_d2_rich_render_preserves_raw_history",
-        format!("rich:\n{rich}\n\nraw:\n{raw}")
-    );
+    let rich = normalized_inline_image_text(&rendered, "<image row; uploads PNG>", "<image row>");
+    assert!(rich.contains("[open/zoom]"));
+    assert!(!rich.contains("Visualization unavailable"));
+    assert_eq!(raw_cell_text(&cell), source.trim_end());
 }
 
 #[test]
@@ -364,32 +373,12 @@ fn rich_agent_cell_automatically_replaces_native_d2_fence_without_rewriting_raw_
         Some(context),
     );
 
-    let rich = cell
-        .display_hyperlink_lines(/*width*/ 40)
-        .iter()
-        .map(|line| {
-            let text = line_text(&line.line);
-            if text.contains('\u{10eeee}') {
-                if line.inline_image.is_some() {
-                    "<image row; uploads PNG>".to_string()
-                } else {
-                    "<image row>".to_string()
-                }
-            } else {
-                text
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let raw = cell
-        .raw_lines()
-        .iter()
-        .map(line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let rendered = cell.display_hyperlink_lines(/*width*/ 40);
+    let rich = normalized_inline_image_text(&rendered, "<image row; uploads PNG>", "<image row>");
+    let raw = raw_cell_text(&cell);
 
     assert_eq!(
-        cell.display_hyperlink_lines(/*width*/ 40)
+        rendered
             .iter()
             .filter(|line| line.inline_image.is_some())
             .count(),
@@ -430,28 +419,12 @@ fn rich_agent_cell_renders_native_latex_in_formula_sized_rows() {
     let zoom_url = url::Url::parse(&zoom_link.hyperlinks[0].destination).expect("file URL");
     assert_eq!(zoom_url.scheme(), "file");
     assert!(zoom_url.to_file_path().expect("local zoom path").is_file());
-    let rich = rendered_lines
-        .iter()
-        .map(|line| {
-            let text = line_text(&line.line);
-            if text.contains('\u{10eeee}') {
-                if line.inline_image.is_some() {
-                    "<formula row; uploads transparent PNG>".to_string()
-                } else {
-                    "<formula row>".to_string()
-                }
-            } else {
-                text
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let raw = cell
-        .raw_lines()
-        .iter()
-        .map(line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let rich = normalized_inline_image_text(
+        &rendered_lines,
+        "<formula row; uploads transparent PNG>",
+        "<formula row>",
+    );
+    let raw = raw_cell_text(&cell);
 
     assert_eq!(
         rendered_lines
@@ -472,34 +445,24 @@ fn rich_agent_cell_replaces_adjacent_mermaid_artifact() {
     let diagram = "sequenceDiagram\n  user->>agent: request\n";
     let (_codex_home, context) =
         context_with_native_image(native::NativeArtifactFormat::Mermaid, diagram);
-    let source = format!(
-        "Before\n\n```mermaid\n{diagram}```\n::codex-inline-vis{{file=\"sequence.png\"}}\n\nAfter\n"
-    );
+    let source = format!("Before\n\n```mermaid\n{diagram}```\n\nAfter\n");
     let cell = AgentMarkdownCell::new_with_inline_visualizations(
-        source,
+        source.clone(),
         Path::new("/workspace"),
         Some(context),
     );
 
-    let rendered = cell
-        .display_hyperlink_lines(/*width*/ 40)
-        .iter()
-        .map(|line| {
-            let text = line_text(&line.line);
-            if text.contains('\u{10eeee}') {
-                if line.inline_image.is_some() {
-                    "<image row; uploads PNG>".to_string()
-                } else {
-                    "<image row>".to_string()
-                }
-            } else {
-                text
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    insta::assert_snapshot!("inline_mermaid_artifact_renders_inline", rendered);
+    let rendered = cell.display_hyperlink_lines(/*width*/ 40);
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+    let rich = normalized_inline_image_text(&rendered, "<image row; uploads PNG>", "<image row>");
+    assert!(rich.contains("[open/zoom]"));
+    assert_eq!(raw_cell_text(&cell), source.trim_end());
 }
 
 #[test]

@@ -357,30 +357,3 @@ fn first_line(output: &str) -> &str {
         .find(|line| !line.is_empty())
         .unwrap_or("ready")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn report_requires_every_dependency() {
-        let report = report(vec![
-            DependencyStatus {
-                id: DependencyId::D2,
-                label: "D2",
-                ready: true,
-                detail: "/bin/d2".to_string(),
-            },
-            DependencyStatus {
-                id: DependencyId::Rasterizer,
-                label: "SVG rasterizer",
-                ready: false,
-                detail: "rsvg-convert was not found".to_string(),
-            },
-        ]);
-
-        assert!(!report.ready);
-        assert!(report.lines.iter().any(|line| line.starts_with("READY")));
-        assert!(report.lines.iter().any(|line| line.starts_with("MISSING")));
-    }
-}

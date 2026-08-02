@@ -16,6 +16,7 @@ use crate::inline_visualization::InlineVisualizationContext;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
+use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
@@ -29,6 +30,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -763,6 +765,12 @@ pub(crate) enum AppEvent {
 
     /// Re-render source-backed transcript cells after native artifact PNGs are materialized.
     InlineVisualizationsReady,
+
+    /// Resolve a preflight visualization compiler call without blocking the TUI event loop.
+    InlineVisualizationCompileFinished {
+        request_id: AppServerRequestId,
+        response: DynamicToolCallResponse,
+    },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
     /// end of the transcript with a single source-backed `ProposedPlanCell`.

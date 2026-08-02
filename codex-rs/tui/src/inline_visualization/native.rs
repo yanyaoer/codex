@@ -165,20 +165,9 @@ pub(super) async fn render_artifacts(
     }
     let mut rendered = 0;
     for artifact in artifacts.into_iter().take(MAX_ARTIFACTS_PER_MESSAGE) {
-        let commands = match RenderCommands::resolve(artifact.format, &context.managed_bin_dir) {
-            Ok(commands) => commands,
-            Err(error) => {
-                tracing::warn!(
-                    format = ?artifact.format,
-                    %error,
-                    "inline visualization dependency is unavailable"
-                );
-                continue;
-            }
-        };
-        match render_artifact(&context.thread_dir, &commands, &artifact).await {
-            Ok(true) => rendered += 1,
-            Ok(false) => {}
+        match compile_artifact(context, &artifact).await {
+            Ok((_, true)) => rendered += 1,
+            Ok((_, false)) => {}
             Err(error) => tracing::warn!(
                 format = ?artifact.format,
                 %error,
@@ -187,6 +176,21 @@ pub(super) async fn render_artifacts(
         }
     }
     rendered
+}
+
+pub(super) async fn compile_artifact(
+    context: &InlineVisualizationContext,
+    artifact: &NativeArtifact,
+) -> Result<(String, bool)> {
+    if !context.native_rendering_enabled {
+        bail!("inline visualization rendering is disabled");
+    }
+    fs::create_dir_all(&context.thread_dir)
+        .context("create inline visualization thread directory")?;
+    let commands = RenderCommands::resolve(artifact.format, &context.managed_bin_dir)?;
+    let file = artifact_file(artifact.format, &artifact.source);
+    let created = render_artifact(&context.thread_dir, &commands, artifact).await?;
+    Ok((file, created))
 }
 
 impl RenderCommands {

@@ -7,9 +7,12 @@ pub(crate) const TERMINAL_VISUALIZATION_INSTRUCTIONS: &str = "\
 - Use trees for hierarchy or one-to-many relationships, and diagrams or timelines for sequence, change, or state transferred between records across event order.
 - Use only ASCII characters in visuals.";
 
+// Preflight compilation keeps syntax errors inside the active model turn, where diagnostics can
+// drive a correction; post-final rendering remains a fallback because history stays source-backed.
 pub(crate) const INLINE_VISUALIZATION_INSTRUCTIONS: &str = "\
 - This terminal automatically renders top-level fenced `d2`, `mermaid`, and `latex` blocks in final answers.
-- When one of those formats materially improves the answer, emit the source block directly; do not invoke a skill, renderer, or tool, create an image file, or add a rendering directive.
+- When `compile_inline_visualization` is available, call it before emitting each such block with a stable `artifact_id`, its format, and the exact source intended for the final answer. If it reports a source error, correct the source and retry with the same `artifact_id` at most twice. After success, emit the exact compiled source unchanged.
+- When the compiler tool is unavailable, emit the supported top-level fenced block directly so the post-turn renderer can attempt it. If all compiler retries fail, omit the failing fence and use plain text or compact ASCII instead. Do not invoke a skill, create a file, or add a rendering directive.
 - Keep the explanation as normal Markdown around the block. Use compact ASCII visuals for unsupported formats.";
 
 pub(crate) fn with_terminal_visualization_instructions(

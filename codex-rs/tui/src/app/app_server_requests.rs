@@ -5,6 +5,7 @@ use super::App;
 use crate::app_command::AppCommand;
 use crate::app_server_approval_conversions::granted_permission_profile_from_request;
 use crate::app_server_session::AppServerSession;
+use crate::inline_visualization::INLINE_VISUALIZATION_MAX_RETRIES;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -13,6 +14,8 @@ use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+
+const MAX_INLINE_VISUALIZATION_ARTIFACTS_PER_TURN: usize = 8;
 
 impl App {
     pub(super) async fn reject_app_server_request(
@@ -74,6 +77,7 @@ pub(super) struct PendingAppServerRequests {
     permissions_approvals: HashMap<String, AppServerRequestId>,
     user_inputs: HashMap<String, VecDeque<PendingUserInputRequest>>,
     mcp_requests: HashMap<McpRequestKey, AppServerRequestId>,
+    inline_visualization_attempts: HashMap<(String, String), u8>,
 }
 
 impl PendingAppServerRequests {
@@ -83,6 +87,44 @@ impl PendingAppServerRequests {
         self.permissions_approvals.clear();
         self.user_inputs.clear();
         self.mcp_requests.clear();
+        self.inline_visualization_attempts.clear();
+    }
+
+    pub(super) fn begin_inline_visualization_compile(
+        &mut self,
+        turn_id: &str,
+        artifact_id: &str,
+    ) -> Result<u8, String> {
+        let key = (turn_id.to_string(), artifact_id.to_string());
+        if !self.inline_visualization_attempts.contains_key(&key)
+            && self
+                .inline_visualization_attempts
+                .keys()
+                .filter(|(pending_turn_id, _)| pending_turn_id == turn_id)
+                .count()
+                >= MAX_INLINE_VISUALIZATION_ARTIFACTS_PER_TURN
+        {
+            return Err(format!(
+                "a turn may compile at most {MAX_INLINE_VISUALIZATION_ARTIFACTS_PER_TURN} inline visualizations"
+            ));
+        }
+
+        let attempts = self.inline_visualization_attempts.entry(key).or_default();
+        // Compiler diagnostics are returned while the model turn is still active so the model can
+        // repair invalid syntax. One initial compile plus two retries bounds that correction loop.
+        let max_attempts = INLINE_VISUALIZATION_MAX_RETRIES + 1;
+        if *attempts >= max_attempts {
+            return Err(format!(
+                "inline visualization retry limit reached ({INLINE_VISUALIZATION_MAX_RETRIES})"
+            ));
+        }
+        *attempts += 1;
+        Ok(max_attempts - *attempts)
+    }
+
+    pub(super) fn clear_inline_visualization_attempts(&mut self, turn_id: &str) {
+        self.inline_visualization_attempts
+            .retain(|(pending_turn_id, _), _| pending_turn_id != turn_id);
     }
 
     pub(super) fn note_server_request(
@@ -415,6 +457,7 @@ struct McpRequestKey {
 
 #[cfg(test)]
 mod tests {
+    use super::MAX_INLINE_VISUALIZATION_ARTIFACTS_PER_TURN;
     use super::PendingAppServerRequests;
     use super::ResolvedAppServerRequest;
     use super::UnsupportedAppServerRequest;
@@ -921,5 +964,55 @@ mod tests {
 
         assert_eq!(first_response.request_id, AppServerRequestId::Integer(8));
         assert_eq!(second_response.request_id, AppServerRequestId::Integer(9));
+    }
+
+    #[test]
+    fn inline_visualization_compile_allows_two_retries_per_artifact() {
+        let mut pending = PendingAppServerRequests::default();
+
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-1", "diagram"),
+            Ok(2)
+        );
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-1", "diagram"),
+            Ok(1)
+        );
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-1", "diagram"),
+            Ok(0)
+        );
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-1", "diagram"),
+            Err("inline visualization retry limit reached (2)".to_string())
+        );
+
+        pending.clear_inline_visualization_attempts("turn-1");
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-1", "diagram"),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn inline_visualization_compile_limits_distinct_artifacts_per_turn() {
+        let mut pending = PendingAppServerRequests::default();
+        for index in 0..MAX_INLINE_VISUALIZATION_ARTIFACTS_PER_TURN {
+            assert_eq!(
+                pending.begin_inline_visualization_compile(
+                    "turn-1",
+                    format!("diagram-{index}").as_str()
+                ),
+                Ok(2)
+            );
+        }
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-1", "one-too-many"),
+            Err("a turn may compile at most 8 inline visualizations".to_string())
+        );
+        assert_eq!(
+            pending.begin_inline_visualization_compile("turn-2", "independent"),
+            Ok(2)
+        );
     }
 }

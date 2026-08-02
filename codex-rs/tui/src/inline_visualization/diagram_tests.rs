@@ -26,19 +26,19 @@ fn preparation_removes_card_background_and_maps_terminal_palette() {
         .into_rgba8();
 
     assert_eq!((prepared.width, prepared.height), (5, 3));
-    assert_eq!(output.get_pixel(0, 0).0, [0, 0, 0, 0]);
-    assert_eq!(output.get_pixel(1, 1).0, [50, 50, 50, 255]);
-    assert_eq!(output.get_pixel(2, 1).0, [230, 230, 230, 255]);
-    assert_eq!(output.get_pixel(3, 1).0, [137, 180, 250, 255]);
-    insta::assert_snapshot!(
-        "terminal_palette_diagram_colors",
-        format!(
-            "background={:?}\nsurface={:?}\nforeground={:?}\naccent={:?}",
+    assert_eq!(
+        [
             output.get_pixel(0, 0).0,
             output.get_pixel(1, 1).0,
             output.get_pixel(2, 1).0,
             output.get_pixel(3, 1).0,
-        )
+        ],
+        [
+            [0, 0, 0, 0],
+            [50, 50, 50, 255],
+            [230, 230, 230, 255],
+            [137, 180, 250, 255],
+        ]
     );
 }
 

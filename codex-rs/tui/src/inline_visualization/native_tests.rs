@@ -126,16 +126,11 @@ E = mc^2
 
     std::fs::create_dir_all(&context.thread_dir).expect("create thread directory");
     for artifact in artifact_blocks(markdown) {
-        let commands = RenderCommands::resolve(artifact.format, &context.managed_bin_dir)
-            .unwrap_or_else(|error| panic!("resolve {:?} renderer: {error:#}", artifact.format));
-        assert!(
-            render_artifact(&context.thread_dir, &commands, &artifact)
-                .await
-                .unwrap_or_else(|error| panic!("render {:?}: {error:#}", artifact.format))
-        );
-        let path = context
-            .thread_dir
-            .join(artifact_file(artifact.format, &artifact.source));
+        let (file, created) = compile_artifact(&context, &artifact)
+            .await
+            .unwrap_or_else(|error| panic!("compile {:?}: {error:#}", artifact.format));
+        assert!(created);
+        let path = context.thread_dir.join(file);
         let image = image::open(&path)
             .unwrap_or_else(|error| panic!("{} should be a decoded PNG: {error}", path.display()));
         assert!(image.width() > 0);
