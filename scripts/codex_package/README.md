@@ -14,6 +14,7 @@ The builder creates a canonical Codex package directory:
 │   └── codex-code-mode-host[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
+│   ├── codex-inline-viz-renderer[.exe]   # primary package only
 │   ├── zsh/bin/zsh                       # supported Unix targets only
 │   ├── codex-command-runner.exe          # Windows only
 │   └── codex-windows-sandbox-setup.exe   # Windows only
@@ -42,6 +43,8 @@ override was provided:
 
 - all targets: the selected entrypoint, unless `--entrypoint-bin` is provided
 - all targets: `codex-code-mode-host`, unless `--code-mode-host-bin` is provided
+- primary package: `codex-inline-viz-renderer`, unless
+  `--inline-viz-renderer-bin` is provided
 - Linux targets: `bwrap`, unless `--bwrap-bin` is provided
 - Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`,
   unless the corresponding prebuilt helper flags are provided

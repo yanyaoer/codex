@@ -40,6 +40,7 @@ class PackageVariant:
 class PackageInputs:
     entrypoint_bin: Path
     code_mode_host_bin: Path
+    inline_viz_renderer_bin: Path | None
     rg_bin: Path
     zsh_bin: Path | None
     bwrap_bin: Path | None

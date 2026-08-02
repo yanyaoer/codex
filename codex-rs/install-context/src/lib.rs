@@ -11,6 +11,11 @@ const CODE_MODE_HOST_EXECUTABLE_NAME: &str = if cfg!(windows) {
 } else {
     "codex-code-mode-host"
 };
+const INLINE_VIZ_RENDERER_EXECUTABLE_NAME: &str = if cfg!(windows) {
+    "codex-inline-viz-renderer.exe"
+} else {
+    "codex-inline-viz-renderer"
+};
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
@@ -159,6 +164,25 @@ impl InstallContext {
                 || self.code_mode_host_program_from_exe(std::env::current_exe().ok().as_deref()),
                 AbsolutePathBuf::into_path_buf,
             )
+    }
+
+    pub fn inline_viz_renderer_program(&self) -> PathBuf {
+        self.bundled_resource(INLINE_VIZ_RENDERER_EXECUTABLE_NAME)
+            .map_or_else(
+                || {
+                    self.inline_viz_renderer_program_from_exe(
+                        std::env::current_exe().ok().as_deref(),
+                    )
+                },
+                AbsolutePathBuf::into_path_buf,
+            )
+    }
+
+    fn inline_viz_renderer_program_from_exe(&self, current_exe: Option<&Path>) -> PathBuf {
+        current_exe
+            .and_then(Path::parent)
+            .map(|parent| parent.join(INLINE_VIZ_RENDERER_EXECUTABLE_NAME))
+            .unwrap_or_else(|| PathBuf::from(INLINE_VIZ_RENDERER_EXECUTABLE_NAME))
     }
 
     fn code_mode_host_program_from_exe(&self, current_exe: Option<&Path>) -> PathBuf {
@@ -327,6 +351,46 @@ mod tests {
     use std::fs;
 
     const TEST_RESOURCE_NAME: &str = "codex-test-helper";
+
+    #[test]
+    fn inline_viz_renderer_prefers_package_resource() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let bin_dir = package_dir.path().join(BIN_DIRNAME);
+        let resources_dir = package_dir.path().join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&resources_dir)?;
+        fs::write(package_dir.path().join(PACKAGE_METADATA_FILENAME), "{}")?;
+        let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        let renderer = resources_dir.join(INLINE_VIZ_RENDERER_EXECUTABLE_NAME);
+        fs::write(&exe_path, "")?;
+        fs::write(&renderer, "")?;
+
+        let context = InstallContext::from_exe(false, Some(&exe_path), None);
+
+        assert_eq!(
+            context.inline_viz_renderer_program(),
+            AbsolutePathBuf::from_absolute_path(renderer.canonicalize()?)?.into_path_buf()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inline_viz_renderer_falls_back_to_cargo_sibling() -> std::io::Result<()> {
+        let target_dir = tempfile::tempdir()?;
+        let exe_path = target_dir
+            .path()
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+        let context = InstallContext::from_exe(false, Some(&exe_path), None);
+
+        assert_eq!(
+            context.inline_viz_renderer_program_from_exe(Some(&exe_path)),
+            target_dir
+                .path()
+                .join(INLINE_VIZ_RENDERER_EXECUTABLE_NAME)
+        );
+        Ok(())
+    }
 
     #[test]
     fn code_mode_host_program_prefers_package_resource_over_legacy_binary() -> std::io::Result<()> {

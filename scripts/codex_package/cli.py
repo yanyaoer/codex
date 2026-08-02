@@ -91,6 +91,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--inline-viz-renderer-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt codex-inline-viz-renderer executable. If omitted "
+            "for the primary Codex package, the renderer is built with Cargo."
+        ),
+    )
+    parser.add_argument(
         "--bwrap-bin",
         type=Path,
         help=(
@@ -167,6 +175,11 @@ def main() -> int:
             "prebuilt code-mode host executable",
             "--code-mode-host-bin",
         ),
+        inline_viz_renderer_bin=resolve_optional_input_path(
+            args.inline_viz_renderer_bin,
+            "prebuilt inline visualization renderer executable",
+            "--inline-viz-renderer-bin",
+        ),
         bwrap_bin=resolve_optional_input_path(
             args.bwrap_bin,
             "prebuilt Linux bwrap executable",
@@ -187,6 +200,7 @@ def main() -> int:
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
+        inline_viz_renderer_bin=source_outputs.inline_viz_renderer_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
         zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest, zsh_bin=args.zsh_bin),
         bwrap_bin=source_outputs.bwrap_bin,

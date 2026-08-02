@@ -130,6 +130,12 @@ class InstallShTest(unittest.TestCase):
                 str(current / "bin" / "codex-code-mode-host"),
             )
             self.assertTrue(os.access(host_path, os.X_OK))
+            self.assertTrue(
+                os.access(
+                    current / "codex-resources" / "codex-inline-viz-renderer",
+                    os.X_OK,
+                )
+            )
 
     def test_releases_latest_installs_verified_package_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -709,6 +715,7 @@ def create_package_release(
 ) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
+    (package_dir / "codex-resources").mkdir()
     (package_dir / "codex-path").mkdir()
     (package_dir / "codex-package.json").write_text("{}\n", encoding="utf-8")
     write_executable(
@@ -717,6 +724,10 @@ def create_package_release(
     )
     write_executable(
         package_dir / "bin" / "codex-code-mode-host",
+        "#!/bin/sh\nexit 0\n",
+    )
+    write_executable(
+        package_dir / "codex-resources" / "codex-inline-viz-renderer",
         "#!/bin/sh\nexit 0\n",
     )
     write_executable(package_dir / "codex-path" / "rg", "#!/bin/sh\nexit 0\n")

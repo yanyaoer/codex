@@ -56,6 +56,12 @@ def build_package_dir(
         bin_dir / f"codex-code-mode-host{spec.exe_suffix}",
         is_windows=spec.is_windows,
     )
+    if inputs.inline_viz_renderer_bin is not None:
+        copy_executable(
+            inputs.inline_viz_renderer_bin,
+            resources_dir / f"codex-inline-viz-renderer{spec.exe_suffix}",
+            is_windows=spec.is_windows,
+        )
     copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
 
     if inputs.zsh_bin is not None:
@@ -139,6 +145,14 @@ def validate_package_dir(
         Path("codex-path") / spec.rg_name,
     ]
     executable_files = list(required_files)
+
+    if variant.name == "codex":
+        renderer_path = (
+            Path("codex-resources")
+            / f"codex-inline-viz-renderer{spec.exe_suffix}"
+        )
+        required_files.append(renderer_path)
+        executable_files.append(renderer_path)
 
     if include_zsh:
         zsh_path = Path("codex-resources") / ZSH_RESOURCE_PATH

@@ -36,6 +36,11 @@ class PackageLayoutTest(unittest.TestCase):
                             code_mode_host_bin=touch_executable(
                                 root / "codex-code-mode-host"
                             ),
+                            inline_viz_renderer_bin=(
+                                touch_executable(root / "codex-inline-viz-renderer")
+                                if variant_name == "codex"
+                                else None
+                            ),
                             rg_bin=rg_bin,
                             zsh_bin=zsh_bin,
                             bwrap_bin=None,
@@ -64,6 +69,12 @@ class PackageLayoutTest(unittest.TestCase):
                                 "zsh": b"signed zsh binary",
                             },
                         )
+                        renderer = (
+                            package_dir
+                            / "codex-resources"
+                            / "codex-inline-viz-renderer"
+                        )
+                        self.assertEqual(renderer.is_file(), variant_name == "codex")
 
     def test_app_server_package_places_code_mode_host_beside_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -73,6 +84,7 @@ class PackageLayoutTest(unittest.TestCase):
             inputs = PackageInputs(
                 entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
+                inline_viz_renderer_bin=None,
                 rg_bin=touch_executable(root / "rg"),
                 zsh_bin=None,
                 bwrap_bin=touch_executable(root / "bwrap"),
@@ -95,6 +107,50 @@ class PackageLayoutTest(unittest.TestCase):
             )
 
             self.assertTrue((package_dir / "bin" / "codex-code-mode-host").is_file())
+
+    def test_windows_primary_package_uses_renderer_exe_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_dir = root / "package"
+            package_dir.mkdir()
+            inputs = PackageInputs(
+                entrypoint_bin=touch_executable(root / "codex.exe"),
+                code_mode_host_bin=touch_executable(root / "codex-code-mode-host.exe"),
+                inline_viz_renderer_bin=touch_executable(
+                    root / "codex-inline-viz-renderer.exe"
+                ),
+                rg_bin=touch_executable(root / "rg.exe"),
+                zsh_bin=None,
+                bwrap_bin=None,
+                codex_command_runner_bin=touch_executable(
+                    root / "codex-command-runner.exe"
+                ),
+                codex_windows_sandbox_setup_bin=touch_executable(
+                    root / "codex-windows-sandbox-setup.exe"
+                ),
+            )
+
+            build_package_dir(
+                package_dir,
+                "1.2.3",
+                PACKAGE_VARIANTS["codex"],
+                TARGET_SPECS["x86_64-pc-windows-msvc"],
+                inputs,
+            )
+            validate_package_dir(
+                package_dir,
+                PACKAGE_VARIANTS["codex"],
+                TARGET_SPECS["x86_64-pc-windows-msvc"],
+                include_zsh=False,
+            )
+
+            self.assertTrue(
+                (
+                    package_dir
+                    / "codex-resources"
+                    / "codex-inline-viz-renderer.exe"
+                ).is_file()
+            )
 
 
 def touch_executable(path: Path) -> Path:

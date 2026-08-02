@@ -944,6 +944,7 @@ install_package_release() {
   chmod 0755 \
     "$stage_release/bin/codex" \
     "$stage_release/bin/codex-code-mode-host" \
+    "$stage_release/codex-resources/codex-inline-viz-renderer" \
     "$stage_release/codex-path/rg"
   if [ -f "$stage_release/codex-resources/bwrap" ]; then
     chmod 0755 "$stage_release/codex-resources/bwrap"
@@ -998,6 +999,7 @@ release_dir_is_complete() {
       [ -f "$release_dir/codex-package.json" ] &&
         [ -x "$release_dir/bin/codex" ] &&
         [ -x "$release_dir/bin/codex-code-mode-host" ] &&
+        [ -x "$release_dir/codex-resources/codex-inline-viz-renderer" ] &&
         [ -x "$release_dir/codex" ] &&
         [ -x "$release_dir/codex-path/rg" ] ||
         return 1

@@ -32,6 +32,9 @@ class MacosSigningEntitlementsTest(unittest.TestCase):
             {ALLOW_JIT: True},
         )
 
+    def test_inline_viz_renderer_has_no_entitlements(self) -> None:
+        self.assertEqual(self.load("codex-inline-viz-renderer"), {})
+
 
 if __name__ == "__main__":
     unittest.main()
