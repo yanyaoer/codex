@@ -91,7 +91,7 @@ impl FromStr for ProtocolSelection {
 }
 
 pub(crate) fn detect_image_support() -> ImageSupport {
-    if env::var_os("TMUX").is_some() || env::var_os("TMUX_PANE").is_some() {
+    if tmux_env_is_active() {
         return ImageSupport::Unsupported(ImageUnsupportedReason::Tmux);
     }
 
@@ -111,6 +111,26 @@ pub(crate) fn detect_image_support() -> ImageSupport {
     }
 
     image_support_for_terminal(&terminal_info())
+}
+
+fn tmux_env_is_active() -> bool {
+    if env::var_os("TMUX").is_none() && env::var_os("TMUX_PANE").is_none() {
+        return false;
+    }
+
+    let term_program = env::var("TERM_PROGRAM").ok();
+    let term = env::var("TERM").ok();
+    !has_direct_terminal_fingerprint(term_program.as_deref(), term.as_deref())
+}
+
+fn has_direct_terminal_fingerprint(term_program: Option<&str>, term: Option<&str>) -> bool {
+    if terminal_field_contains(term, "tmux") || terminal_field_contains(term, "screen") {
+        return false;
+    }
+
+    ["ghostty", "kitty", "wezterm"].into_iter().any(|terminal| {
+        terminal_field_contains(term_program, terminal) && terminal_field_contains(term, terminal)
+    })
 }
 
 fn image_support_for_terminal(info: &TerminalInfo) -> ImageSupport {
@@ -255,7 +275,7 @@ fn kitty_image_id_arg(image_id: Option<u32>) -> String {
 }
 
 fn wrap_for_tmux_if_needed(command: &str) -> String {
-    if env::var_os("TMUX").is_none() {
+    if !tmux_env_is_active() {
         return command.to_string();
     }
 
@@ -343,6 +363,8 @@ mod tests {
     #[serial]
     fn tmux_passthrough_wraps_and_escapes_control_sequence() {
         let _guard = EnvVarGuard::new("TMUX", Some("session"));
+        let _term_program = EnvVarGuard::new("TERM_PROGRAM", Some("tmux"));
+        let _term = EnvVarGuard::new("TERM", Some("tmux-256color"));
         assert_eq!(
             wrap_for_tmux_if_needed("\x1b_Gx;\x1b\\"),
             "\x1bPtmux;\x1b\x1b_Gx;\x1b\x1b\\\x1b\\"
@@ -369,11 +391,32 @@ mod tests {
     #[serial]
     fn auto_protocol_is_disabled_inside_tmux() {
         let _guard = EnvVarGuard::new("TMUX", Some("session"));
+        let _term_program = EnvVarGuard::new("TERM_PROGRAM", Some("tmux"));
+        let _term = EnvVarGuard::new("TERM", Some("tmux-256color"));
 
         assert_eq!(
             ProtocolSelection::Auto.resolve(),
             ImageSupport::Unsupported(ImageUnsupportedReason::Tmux)
         );
+    }
+
+    #[test]
+    #[serial]
+    fn stale_tmux_env_from_direct_ghostty_does_not_disable_images() {
+        let _tmux = EnvVarGuard::new("TMUX", Some("/tmp/tmux/default,123,0"));
+        let _tmux_pane = EnvVarGuard::new("TMUX_PANE", Some("%8"));
+        let _term_program = EnvVarGuard::new("TERM_PROGRAM", Some("ghostty"));
+        let _term = EnvVarGuard::new("TERM", Some("xterm-ghostty"));
+        let _kitty = EnvVarGuard::new("KITTY_WINDOW_ID", Some("5"));
+        let _zellij = EnvVarGuard::new("ZELLIJ", /*value*/ None);
+        let _zellij_session = EnvVarGuard::new("ZELLIJ_SESSION_NAME", /*value*/ None);
+        let _zellij_version = EnvVarGuard::new("ZELLIJ_VERSION", /*value*/ None);
+
+        assert_eq!(
+            detect_image_support(),
+            ImageSupport::Supported(ImageProtocol::Kitty)
+        );
+        assert_eq!(wrap_for_tmux_if_needed("\x1b_Gx;\x1b\\"), "\x1b_Gx;\x1b\\");
     }
 
     #[test]
