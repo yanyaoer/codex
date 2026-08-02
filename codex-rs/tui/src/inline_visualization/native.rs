@@ -408,10 +408,7 @@ fn validate_source(artifact: &NativeArtifact) -> Result<()> {
         NativeArtifactFormat::D2 => {
             if source.lines().any(|line| {
                 let code = line.split('#').next().unwrap_or_default();
-                code.trim_start().starts_with('@')
-                    || code.contains(": @")
-                    || code.contains("icon:")
-                    || code.contains("image:")
+                code.trim_start().starts_with('@') || code.contains(": @") || code.contains("icon:")
             }) {
                 bail!("D2 imports and icons are disabled for automatic rendering");
             }

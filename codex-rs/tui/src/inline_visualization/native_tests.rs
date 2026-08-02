@@ -60,6 +60,13 @@ fn automatic_rendering_rejects_external_resource_syntax() {
     assert!(validate_source(&artifact(NativeArtifactFormat::D2, "@x: file.d2")).is_err());
     assert!(
         validate_source(&artifact(
+            NativeArtifactFormat::D2,
+            "server: {\n  shape: image\n  icon: ./secret.png\n}"
+        ))
+        .is_err()
+    );
+    assert!(
+        validate_source(&artifact(
             NativeArtifactFormat::Mermaid,
             "flowchart LR\nclick x https://example.com"
         ))
@@ -71,6 +78,17 @@ fn automatic_rendering_rejects_external_resource_syntax() {
             "\\input{/etc/passwd}"
         ))
         .is_err()
+    );
+}
+
+#[test]
+fn automatic_rendering_allows_d2_node_named_image() {
+    assert!(
+        validate_source(&artifact(
+            NativeArtifactFormat::D2,
+            "display: {\n  image: \"InlineImage\\nhash-derived image ID\"\n}"
+        ))
+        .is_ok()
     );
 }
 
@@ -88,6 +106,12 @@ async fn real_renderer_materializes_all_formats_when_requested() {
     let markdown = r#"```d2
 direction: right
 user -> agent -> tool
+display: {
+  image: "InlineImage\nhash-derived image ID"
+  terminal: "Kitty Graphics Protocol"
+  image -> terminal
+}
+tool -> display.image
 ```
 
 ```mermaid
