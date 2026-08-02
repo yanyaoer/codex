@@ -1,0 +1,34 @@
+[package]
+name = "codex-inline-viz-renderer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "codex-inline-viz-renderer"
+path = "src/main.rs"
+
+[lib]
+doctest = false
+name = "codex_inline_viz_renderer"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+layout-rs = { workspace = true }
+mermaid-rs-renderer = { workspace = true }
+ratex-layout = { workspace = true }
+ratex-parser = { workspace = true }
+ratex-svg = { workspace = true }
+ratex-types = { workspace = true }
+resvg = { workspace = true }
+ttf-parser = { workspace = true }
+usvg = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true, features = ["png"] }
+tempfile = { workspace = true }

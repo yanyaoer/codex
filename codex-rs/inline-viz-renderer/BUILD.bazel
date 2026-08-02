@@ -1,0 +1,8 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "inline-viz-renderer",
+    compile_data = glob(["assets/**"]),
+    crate_name = "codex_inline_viz_renderer",
+)
+
