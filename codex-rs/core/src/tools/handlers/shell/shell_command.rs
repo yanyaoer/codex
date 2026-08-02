@@ -7,6 +7,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_env::inject_permission_profile_env;
+use crate::exec_env::inject_visualization_dir_env;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
@@ -107,6 +108,7 @@ impl ShellCommandHandler {
         );
         let active_permission_profile = turn_context.config.permissions.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
+        inject_visualization_dir_env(&mut env, &turn_context.config, session.thread_id);
         let sandbox_permissions = resolve_sandbox_permissions(
             params.sandbox_permissions,
             params.justification.as_deref(),

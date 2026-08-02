@@ -328,10 +328,11 @@ impl ChatWidget {
         }
         let parsed = parse_assistant_markdown(&message, self.config.cwd.as_path());
         self.finalize_completed_assistant_message(Some(parsed.visible_markdown.as_str()));
-        if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
-            && !parsed.visible_markdown.is_empty()
-        {
-            self.record_agent_markdown(&parsed.visible_markdown);
+        if matches!(item.phase, Some(MessagePhase::FinalAnswer) | None) {
+            self.update_artifact_preview(&parsed.visible_markdown);
+            if !parsed.visible_markdown.is_empty() {
+                self.record_agent_markdown(&parsed.visible_markdown);
+            }
         }
         if !from_replay
             && let Some(cwd) = parsed.last_created_branch_cwd()

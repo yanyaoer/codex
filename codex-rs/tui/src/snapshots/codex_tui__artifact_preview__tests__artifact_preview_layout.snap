@@ -1,0 +1,8 @@
+---
+source: tui/src/artifact_preview_tests.rs
+expression: "format!(\"desired_height={}\\nimage_area=({}, {}, {}, {})\\nheight_px={}\\nlabel={label}\",\narea.height, request.x, request.y, request.columns, request.rows,\nrequest.height_px)"
+---
+desired_height=19
+image_area=(5, 6, 69, 18)
+height_px=270
+label=Visualization: chart.png

@@ -209,6 +209,7 @@ mod agent_status_feed;
 mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
+mod artifact_preview;
 mod background_requests;
 mod config_persistence;
 mod event_dispatch;
@@ -1254,15 +1255,23 @@ See the Codex keymap documentation for supported actions and examples."
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
+        let clear_artifact_result = tui.clear_artifact_preview_image();
         let clear_pet_result = tui.clear_ambient_pet_image();
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
+                clear_artifact_result?;
                 clear_pet_result?;
                 clear_result?;
                 exit_reason
             }
             Err(err) => {
+                if let Err(clear_artifact_err) = clear_artifact_result {
+                    tracing::warn!(
+                        error = %clear_artifact_err,
+                        "failed to clear artifact preview image"
+                    );
+                }
                 if let Err(clear_pet_err) = clear_pet_result {
                     tracing::warn!(error = %clear_pet_err, "failed to clear ambient pet image");
                 }
@@ -1309,6 +1318,7 @@ See the Codex keymap documentation for supported actions and examples."
         };
 
         if self.overlay.is_some() {
+            self.clear_artifact_preview_image(tui)?;
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
@@ -1339,6 +1349,8 @@ See the Codex keymap documentation for supported actions and examples."
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
                     let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;
+                    let artifact_preview_enabled =
+                        self.chat_widget.artifact_preview_image_enabled();
                     if self.chat_widget.ambient_pet_image_enabled() {
                         let ambient_pet_area = Rect::new(
                             /*x*/ 0,
@@ -1347,11 +1359,20 @@ See the Codex keymap documentation for supported actions and examples."
                             screen_size.height,
                         );
                         if let Err(err) = tui.draw_ambient_pet_image(
-                            self.chat_widget
-                                .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
+                            (!artifact_preview_enabled)
+                                .then(|| {
+                                    self.chat_widget
+                                        .ambient_pet_draw(ambient_pet_area, rendered_area.bottom())
+                                })
+                                .flatten(),
                         ) {
                             self.handle_ambient_pet_image_render_error(tui, err)?;
                         }
+                    }
+                    if let Err(err) =
+                        tui.draw_artifact_preview_image(self.chat_widget.artifact_preview_draw())
+                    {
+                        self.handle_artifact_preview_image_render_error(tui, err)?;
                     }
                     if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
                         if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
@@ -1374,6 +1395,8 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.chat_widget.clear_artifact_preview();
+        self.clear_artifact_preview_image(tui)?;
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
         let screen_size = tui.terminal.last_known_screen_size;

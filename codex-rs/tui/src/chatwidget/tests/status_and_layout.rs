@@ -8,8 +8,8 @@ use ratatui::backend::TestBackend;
 use serial_test::serial;
 
 fn enable_test_ambient_pet(chat: &mut ChatWidget) {
-    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
-        crate::pets::ImageProtocol::Kitty,
+    chat.set_pet_image_support_for_tests(crate::terminal_image::ImageSupport::Supported(
+        crate::terminal_image::ImageProtocol::Kitty,
     ));
     chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
 }
@@ -2293,8 +2293,8 @@ async fn ambient_pet_stays_hidden_until_a_pet_is_selected() {
     use ratatui::layout::Rect;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
-        crate::pets::ImageProtocol::Kitty,
+    chat.set_pet_image_support_for_tests(crate::terminal_image::ImageSupport::Supported(
+        crate::terminal_image::ImageProtocol::Kitty,
     ));
     assert!(chat.ambient_pet.is_none());
 

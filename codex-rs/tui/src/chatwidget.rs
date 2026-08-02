@@ -357,6 +357,7 @@ mod ide_context;
 use self::ide_context::IdeContextState;
 mod input_queue;
 use self::input_queue::InputQueueState;
+mod artifact_preview;
 mod input_flow;
 mod input_restore;
 mod input_submission;
@@ -651,13 +652,15 @@ pub(crate) struct ChatWidget {
     pub(crate) pet_http_client: codex_http_client::RouteAwareClientPool,
     // Ambient companion rendered over the transcript area, never inside the footer rows.
     ambient_pet: Option<crate::pets::AmbientPet>,
+    // Latest validated static visualization, reserved above the composer until the next prompt.
+    artifact_preview: Option<crate::artifact_preview::ArtifactPreview>,
     pet_picker_preview_state: crate::pets::PetPickerPreviewState,
     pet_picker_preview_pet: Option<crate::pets::AmbientPet>,
     pet_picker_preview_request_id: u64,
     pet_picker_preview_image_visible: std::cell::Cell<bool>,
     pet_selection_load_request_id: u64,
     #[cfg(test)]
-    pet_image_support_override: Option<crate::pets::PetImageSupport>,
+    pet_image_support_override: Option<crate::terminal_image::ImageSupport>,
     thread_id: Option<ThreadId>,
     /// Nudge dismissals that should survive draft edits within the current thread scope.
     ///
@@ -1269,6 +1272,7 @@ impl ChatWidget {
     }
 
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+        self.clear_artifact_preview();
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {

@@ -233,6 +233,8 @@ fn next_goal_draft(
 
 mod app_server;
 mod approval_requests;
+#[path = "tests/artifact_preview.rs"]
+mod artifact_preview;
 mod composer_submission;
 #[path = "tests/config_errors_tests.rs"]
 mod config_errors;

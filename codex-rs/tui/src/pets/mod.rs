@@ -13,17 +13,13 @@
 //! persistence or popup orchestration; callers must persist the final selection
 //! only after the load succeeds.
 
-use std::io::Write;
-
 mod ambient;
 mod asset_pack;
 mod catalog;
 mod frames;
-mod image_protocol;
 mod model;
 mod picker;
 mod preview;
-mod sixel;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -32,27 +28,43 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::tui::FrameRequester;
 
+pub(crate) use crate::terminal_image::DrawRequest as AmbientPetDraw;
+#[cfg(test)]
+use crate::terminal_image::ImageProtocol;
+use crate::terminal_image::RenderError;
+use crate::terminal_image::RenderState;
 pub(crate) use ambient::AmbientPet;
-pub(crate) use ambient::AmbientPetDraw;
 pub(crate) use ambient::PetNotificationKind;
 #[cfg(test)]
 pub(crate) use ambient::test_ambient_pet;
 pub(crate) use asset_pack::builtin_spritesheet_path;
 #[cfg(test)]
 pub(crate) use asset_pack::write_test_pack;
-#[cfg(test)]
-pub(crate) use image_protocol::ImageProtocol;
-pub(crate) use image_protocol::PetImageSupport;
-#[cfg(test)]
-pub(crate) use image_protocol::PetImageUnsupportedReason;
-#[cfg(not(test))]
-pub(crate) use image_protocol::detect_pet_image_support;
 pub(crate) use picker::PET_PICKER_VIEW_ID;
 pub(crate) use picker::build_pet_picker_params;
 pub(crate) use preview::PetPickerPreviewState;
 
 pub(crate) const DEFAULT_PET_ID: &str = "codex";
 pub(crate) const DISABLED_PET_ID: &str = "disabled";
+
+pub(crate) fn image_unsupported_message(
+    reason: crate::terminal_image::ImageUnsupportedReason,
+) -> &'static str {
+    match reason {
+        crate::terminal_image::ImageUnsupportedReason::Tmux => {
+            "Pets are disabled in tmux. Terminal images don’t stay pane-local in tmux and can corrupt scrollback or move between panes. Run Codex outside tmux to use pets."
+        }
+        crate::terminal_image::ImageUnsupportedReason::Zellij => {
+            "Pets are disabled in Zellij. Terminal images don’t stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
+        }
+        crate::terminal_image::ImageUnsupportedReason::Iterm2TooOld => {
+            "Pets require iTerm2 3.6 or newer. Upgrade iTerm2 to use terminal pets."
+        }
+        crate::terminal_image::ImageUnsupportedReason::Terminal => {
+            "Pets aren’t available in this terminal. Terminal pets need image support, and this terminal environment doesn’t expose a supported image protocol. Try a terminal with Kitty graphics or Sixel support, or run Codex outside tmux."
+        }
+    }
+}
 
 /// Ensure that a selected built-in pet has a locally cached spritesheet.
 ///
@@ -92,186 +104,23 @@ pub(crate) async fn load_pet_with_assets(
     .context("join pet load task")?
 }
 
-#[derive(Debug)]
-pub(crate) enum PetImageRenderError {
-    Terminal(std::io::Error),
-    Asset(anyhow::Error),
-}
-
-impl std::fmt::Display for PetImageRenderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Terminal(err) => write!(f, "terminal image write failed: {err}"),
-            Self::Asset(err) => write!(f, "pet image asset unavailable: {err}"),
-        }
-    }
-}
-
-impl std::error::Error for PetImageRenderError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Terminal(err) => Some(err),
-            Self::Asset(err) => Some(err.as_ref()),
-        }
-    }
-}
-
-impl From<std::io::Error> for PetImageRenderError {
-    fn from(err: std::io::Error) -> Self {
-        Self::Terminal(err)
-    }
-}
+const AMBIENT_PET_IMAGE_ID: u32 = 0xC0DE;
+const PET_PICKER_PREVIEW_IMAGE_ID: u32 = 0xC0DF;
 
 pub(crate) fn render_ambient_pet_image(
-    writer: &mut impl Write,
-    state: &mut PetImageRenderState,
+    writer: &mut impl std::io::Write,
+    state: &mut RenderState,
     request: Option<AmbientPetDraw>,
-) -> std::result::Result<(), PetImageRenderError> {
-    render_pet_image(writer, state, /*image_id*/ 0xC0DE, request)
+) -> std::result::Result<(), RenderError> {
+    crate::terminal_image::render(writer, state, AMBIENT_PET_IMAGE_ID, request)
 }
 
 pub(crate) fn render_pet_picker_preview_image(
-    writer: &mut impl Write,
-    state: &mut PetImageRenderState,
+    writer: &mut impl std::io::Write,
+    state: &mut RenderState,
     request: Option<AmbientPetDraw>,
-) -> std::result::Result<(), PetImageRenderError> {
-    render_pet_image(writer, state, /*image_id*/ 0xC0DF, request)
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct PetImageRenderState {
-    last_sixel_clear_area: Option<SixelClearArea>,
-    last_protocol: Option<image_protocol::ImageProtocol>,
-}
-
-fn render_pet_image(
-    writer: &mut impl Write,
-    state: &mut PetImageRenderState,
-    image_id: u32,
-    request: Option<AmbientPetDraw>,
-) -> std::result::Result<(), PetImageRenderError> {
-    use crossterm::cursor::MoveTo;
-    use crossterm::cursor::RestorePosition;
-    use crossterm::cursor::SavePosition;
-    use crossterm::queue;
-    use image_protocol::ImageProtocol;
-
-    let Some(request) = request else {
-        if state.last_protocol.take().is_some_and(is_kitty_protocol) {
-            write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
-        }
-        if let Some(area) = state.last_sixel_clear_area.take() {
-            queue!(writer, SavePosition)?;
-            clear_sixel_area(writer, area)?;
-            queue!(writer, RestorePosition)?;
-        }
-        writer.flush()?;
-        return Ok(());
-    };
-
-    if state.last_protocol.take().is_some_and(is_kitty_protocol)
-        || is_kitty_protocol(request.protocol)
-    {
-        write!(writer, "{}", image_protocol::kitty_delete_image(image_id))?;
-    }
-    state.last_protocol = Some(request.protocol);
-
-    let payload = match request.protocol {
-        ImageProtocol::Kitty => AmbientPetPayload::Text(
-            image_protocol::kitty_transmit_png_with_id(
-                &request.frame,
-                request.columns,
-                request.rows,
-                Some(image_id),
-            )
-            .map_err(PetImageRenderError::Asset)?,
-        ),
-        ImageProtocol::KittyLocalFile => AmbientPetPayload::Text(
-            image_protocol::kitty_transmit_png_file_with_id(
-                &request.frame,
-                request.columns,
-                request.rows,
-                Some(image_id),
-            )
-            .map_err(PetImageRenderError::Asset)?,
-        ),
-        ImageProtocol::Sixel => {
-            let path =
-                image_protocol::sixel_frame(&request.frame, &request.sixel_dir, request.height_px)
-                    .map_err(PetImageRenderError::Asset)?;
-            let sixel = std::fs::read(&path)
-                .with_context(|| format!("read {}", path.display()))
-                .map_err(PetImageRenderError::Asset)?;
-            AmbientPetPayload::Bytes(sixel)
-        }
-    };
-
-    queue!(writer, SavePosition)?;
-    let current_sixel_clear_area = if matches!(request.protocol, ImageProtocol::Sixel) {
-        Some(SixelClearArea::from(&request))
-    } else {
-        None
-    };
-    if let Some(previous_area) = state.last_sixel_clear_area.take()
-        && Some(previous_area) != current_sixel_clear_area
-    {
-        clear_sixel_area(writer, previous_area)?;
-    }
-    if let Some(area) = current_sixel_clear_area {
-        clear_sixel_area(writer, area)?;
-        state.last_sixel_clear_area = Some(area);
-    }
-    queue!(writer, MoveTo(request.x, request.y))?;
-    match payload {
-        AmbientPetPayload::Text(payload) => write!(writer, "{payload}")?,
-        AmbientPetPayload::Bytes(payload) => writer.write_all(&payload)?,
-    }
-    queue!(writer, RestorePosition)?;
-    writer.flush()?;
-    Ok(())
-}
-
-enum AmbientPetPayload {
-    Text(String),
-    Bytes(Vec<u8>),
-}
-
-fn is_kitty_protocol(protocol: image_protocol::ImageProtocol) -> bool {
-    matches!(
-        protocol,
-        image_protocol::ImageProtocol::Kitty | image_protocol::ImageProtocol::KittyLocalFile
-    )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SixelClearArea {
-    x: u16,
-    clear_top_y: u16,
-    clear_bottom_y: u16,
-    columns: u16,
-}
-
-impl From<&AmbientPetDraw> for SixelClearArea {
-    fn from(request: &AmbientPetDraw) -> Self {
-        Self {
-            x: request.x,
-            clear_top_y: request.clear_top_y,
-            clear_bottom_y: request.y.saturating_add(request.rows),
-            columns: request.columns,
-        }
-    }
-}
-
-fn clear_sixel_area(writer: &mut impl Write, area: SixelClearArea) -> std::io::Result<()> {
-    use crossterm::cursor::MoveTo;
-    use crossterm::queue;
-
-    let blank = " ".repeat(area.columns.into());
-    for row in area.clear_top_y..area.clear_bottom_y {
-        queue!(writer, MoveTo(area.x, row))?;
-        write!(writer, "{blank}")?;
-    }
-    Ok(())
+) -> std::result::Result<(), RenderError> {
+    crate::terminal_image::render(writer, state, PET_PICKER_PREVIEW_IMAGE_ID, request)
 }
 
 #[cfg(test)]
@@ -280,7 +129,6 @@ mod tests {
     use std::io;
     use std::path::PathBuf;
 
-    use super::image_protocol::ImageProtocol;
     use super::*;
 
     #[test]
@@ -300,7 +148,7 @@ mod tests {
             sixel_dir: PathBuf::new(),
         };
         let mut output = Vec::new();
-        let mut state = PetImageRenderState::default();
+        let mut state = RenderState::default();
 
         render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
 
@@ -331,7 +179,7 @@ mod tests {
             sixel_dir: PathBuf::new(),
         };
         let mut output = Vec::new();
-        let mut state = PetImageRenderState::default();
+        let mut state = RenderState::default();
 
         render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
         output.clear();
@@ -361,7 +209,7 @@ mod tests {
             sixel_dir: PathBuf::new(),
         };
         let mut output = Vec::new();
-        let mut state = PetImageRenderState::default();
+        let mut state = RenderState::default();
 
         render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
 
@@ -394,7 +242,7 @@ mod tests {
             sixel_dir,
         };
         let mut output = Vec::new();
-        let mut state = PetImageRenderState::default();
+        let mut state = RenderState::default();
 
         render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
 
@@ -425,7 +273,7 @@ mod tests {
             sixel_dir,
         };
         let mut output = Vec::new();
-        let mut state = PetImageRenderState::default();
+        let mut state = RenderState::default();
 
         render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap();
         output.clear();
@@ -454,11 +302,11 @@ mod tests {
             sixel_dir: PathBuf::new(),
         };
         let mut output = Vec::new();
-        let mut state = PetImageRenderState::default();
+        let mut state = RenderState::default();
 
         let err = render_ambient_pet_image(&mut output, &mut state, Some(request)).unwrap_err();
 
-        assert!(matches!(err, PetImageRenderError::Asset(_)));
+        assert!(matches!(err, RenderError::Asset(_)));
         assert!(err.source().is_some());
     }
 
@@ -479,15 +327,23 @@ mod tests {
             }
         }
 
-        let mut writer = FailingWriter;
-        let mut state = PetImageRenderState {
-            last_protocol: Some(ImageProtocol::Kitty),
-            ..Default::default()
+        let request = AmbientPetDraw {
+            frame: PathBuf::from("unused.png"),
+            protocol: ImageProtocol::Kitty,
+            x: 0,
+            y: 0,
+            clear_top_y: 0,
+            columns: 1,
+            rows: 1,
+            height_px: 1,
+            sixel_dir: PathBuf::new(),
         };
+        let mut writer = FailingWriter;
+        let mut state = RenderState::default();
 
-        let err = render_ambient_pet_image(&mut writer, &mut state, /*request*/ None).unwrap_err();
+        let err = render_ambient_pet_image(&mut writer, &mut state, Some(request)).unwrap_err();
 
-        assert!(matches!(err, PetImageRenderError::Terminal(_)));
+        assert!(matches!(err, RenderError::Terminal(_)));
         assert!(err.source().is_some());
     }
 }

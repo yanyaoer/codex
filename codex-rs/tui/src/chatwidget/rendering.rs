@@ -46,6 +46,9 @@ impl ChatWidget {
                 })),
             );
         }
+        if let Some(preview) = self.artifact_preview.as_ref() {
+            flex.push(/*flex*/ 0, RenderableItem::Borrowed(preview));
+        }
         flex.push(
             /*flex*/ 0,
             self.bottom_pane

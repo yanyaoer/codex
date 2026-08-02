@@ -22,6 +22,26 @@ fn context_with_fragment(fragment: &str) -> (TempDir, InlineVisualizationContext
     (codex_home, context)
 }
 
+fn write_png(path: &Path, width: u32, height: u32, color: [u8; 4]) {
+    image::RgbaImage::from_pixel(width, height, image::Rgba(color))
+        .save_with_format(path, image::ImageFormat::Png)
+        .expect("write PNG");
+}
+
+fn context_with_png() -> (TempDir, InlineVisualizationContext) {
+    let codex_home = tempfile::tempdir().expect("temp codex home");
+    let context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
+        .expect("visualization context");
+    fs::create_dir_all(&context.thread_dir).expect("create visualization directory");
+    write_png(
+        &context.thread_dir.join("chart.png"),
+        /*width*/ 64,
+        /*height*/ 32,
+        [20, 80, 160, 255],
+    );
+    (codex_home, context)
+}
+
 #[test]
 fn granted_visualization_root_overrides_thread_id_derived_root() {
     let codex_home = tempfile::tempdir().expect("temp codex home");
@@ -113,6 +133,83 @@ fn rewrites_complete_directive_to_trusted_static_file_placeholder() {
 }
 
 #[test]
+fn rewrites_png_directive_to_validated_cached_file() {
+    let (codex_home, context) = context_with_png();
+
+    let rewritten =
+        rewrite_inline_visualizations("::codex-inline-vis{file=\"chart.png\"}", Some(&context));
+    let destination = rewritten
+        .trusted_file_links
+        .values()
+        .next()
+        .expect("trusted PNG destination");
+    let cached_path = destination
+        .destination
+        .to_file_path()
+        .expect("cached file path");
+    let image = context.image_for("chart.png").expect("validated image");
+
+    assert_eq!(cached_path, image.path);
+    assert_eq!((image.width, image.height), (64, 32));
+    assert!(cached_path.starts_with(codex_home.path().join("cache/tui-visualizations")));
+    assert!(cached_path.is_file());
+}
+
+#[test]
+fn png_cache_is_content_addressed_and_immutable() {
+    let (_codex_home, context) = context_with_png();
+    let first = context.image_for("chart.png").expect("first image");
+    let first_bytes = fs::read(&first.path).expect("read first cached image");
+
+    write_png(
+        &context.thread_dir.join("chart.png"),
+        /*width*/ 64,
+        /*height*/ 32,
+        [200, 40, 20, 255],
+    );
+    let second = context.image_for("chart.png").expect("second image");
+
+    assert_ne!(second.path, first.path);
+    assert_eq!(
+        fs::read(first.path).expect("reread first image"),
+        first_bytes
+    );
+}
+
+#[test]
+fn latest_png_ignores_directives_in_code_blocks() {
+    let (_codex_home, context) = context_with_png();
+    fs::copy(
+        context.thread_dir.join("chart.png"),
+        context.thread_dir.join("final.png"),
+    )
+    .expect("copy final image");
+
+    let latest = context
+        .latest_image(
+            "```text\n::codex-inline-vis{file=\"ignored.png\"}\n```\n::codex-inline-vis{file=\"chart.png\"}\n::codex-inline-vis{file=\"final.png\"}",
+        )
+        .expect("latest image");
+
+    assert_eq!(latest.file_name, "final.png");
+}
+
+#[test]
+fn rejects_corrupt_and_overdimensioned_pngs() {
+    let (_codex_home, context) = context_with_png();
+    fs::write(context.thread_dir.join("corrupt.png"), b"not a PNG").expect("write corrupt image");
+    write_png(
+        &context.thread_dir.join("wide.png"),
+        MAX_IMAGE_DIMENSION + 1,
+        /*height*/ 1,
+        [0, 0, 0, 255],
+    );
+
+    assert!(context.image_for("corrupt.png").is_none());
+    assert!(context.image_for("wide.png").is_none());
+}
+
+#[test]
 fn hides_incomplete_streaming_directive() {
     let rewritten = rewrite_inline_visualizations(
         "Before\n::codex-inline-vis{file=\"chart",
@@ -137,7 +234,7 @@ fn unavailable_artifact_has_explicit_fallback() {
 }
 
 #[test]
-fn rejects_parent_path_and_non_html_file() {
+fn rejects_parent_path_and_unsupported_file() {
     let (_codex_home, context) = context_with_fragment("<div>chart</div>");
 
     for file in ["../chart.html", "chart.svg"] {

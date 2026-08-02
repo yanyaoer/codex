@@ -31,12 +31,12 @@ pub enum ImageProtocol {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PetImageSupport {
+pub(crate) enum ImageSupport {
     Supported(ImageProtocol),
-    Unsupported(PetImageUnsupportedReason),
+    Unsupported(ImageUnsupportedReason),
 }
 
-impl PetImageSupport {
+impl ImageSupport {
     pub(crate) fn protocol(self) -> Option<ImageProtocol> {
         match self {
             Self::Supported(protocol) => Some(protocol),
@@ -44,39 +44,20 @@ impl PetImageSupport {
         }
     }
 
-    pub(crate) fn unsupported_message(self) -> Option<&'static str> {
+    pub(crate) fn unsupported_reason(self) -> Option<ImageUnsupportedReason> {
         match self {
             Self::Supported(_) => None,
-            Self::Unsupported(reason) => Some(reason.message()),
+            Self::Unsupported(reason) => Some(reason),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PetImageUnsupportedReason {
+pub(crate) enum ImageUnsupportedReason {
     Tmux,
     Zellij,
     Iterm2TooOld,
     Terminal,
-}
-
-impl PetImageUnsupportedReason {
-    fn message(self) -> &'static str {
-        match self {
-            Self::Tmux => {
-                "Pets are disabled in tmux. Terminal images don’t stay pane-local in tmux and can corrupt scrollback or move between panes. Run Codex outside tmux to use pets."
-            }
-            Self::Zellij => {
-                "Pets are disabled in Zellij. Terminal images don’t stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
-            }
-            Self::Iterm2TooOld => {
-                "Pets require iTerm2 3.6 or newer. Upgrade iTerm2 to use terminal pets."
-            }
-            Self::Terminal => {
-                "Pets aren’t available in this terminal. Terminal pets need image support, and this terminal environment doesn’t expose a supported image protocol. Try a terminal with Kitty graphics or Sixel support, or run Codex outside tmux."
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,11 +68,11 @@ pub enum ProtocolSelection {
 }
 
 impl ProtocolSelection {
-    pub(crate) fn resolve(self) -> PetImageSupport {
+    pub(crate) fn resolve(self) -> ImageSupport {
         match self {
-            Self::Kitty => PetImageSupport::Supported(ImageProtocol::Kitty),
-            Self::Sixel => PetImageSupport::Supported(ImageProtocol::Sixel),
-            Self::Auto => detect_pet_image_support(),
+            Self::Kitty => ImageSupport::Supported(ImageProtocol::Kitty),
+            Self::Sixel => ImageSupport::Supported(ImageProtocol::Sixel),
+            Self::Auto => detect_image_support(),
         }
     }
 }
@@ -109,57 +90,57 @@ impl FromStr for ProtocolSelection {
     }
 }
 
-pub(crate) fn detect_pet_image_support() -> PetImageSupport {
+pub(crate) fn detect_image_support() -> ImageSupport {
     if env::var_os("TMUX").is_some() || env::var_os("TMUX_PANE").is_some() {
-        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
+        return ImageSupport::Unsupported(ImageUnsupportedReason::Tmux);
     }
 
     if env::var_os("ZELLIJ").is_some()
         || env::var_os("ZELLIJ_SESSION_NAME").is_some()
         || env::var_os("ZELLIJ_VERSION").is_some()
     {
-        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
+        return ImageSupport::Unsupported(ImageUnsupportedReason::Zellij);
     }
 
     if env::var_os("KITTY_WINDOW_ID").is_some() {
-        return PetImageSupport::Supported(ImageProtocol::Kitty);
+        return ImageSupport::Supported(ImageProtocol::Kitty);
     }
 
     if env::var_os("WEZTERM_EXECUTABLE").is_some() || env::var_os("WEZTERM_VERSION").is_some() {
-        return PetImageSupport::Supported(ImageProtocol::Kitty);
+        return ImageSupport::Supported(ImageProtocol::Kitty);
     }
 
-    pet_image_support_for_terminal(&terminal_info())
+    image_support_for_terminal(&terminal_info())
 }
 
-fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
+fn image_support_for_terminal(info: &TerminalInfo) -> ImageSupport {
     match info.multiplexer {
         Some(Multiplexer::Tmux { .. }) => {
-            return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
+            return ImageSupport::Unsupported(ImageUnsupportedReason::Tmux);
         }
         Some(Multiplexer::Zellij { .. }) => {
-            return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
+            return ImageSupport::Unsupported(ImageUnsupportedReason::Zellij);
         }
         None => {}
     }
 
     if supports_iterm2_kitty_graphics(info) {
-        return PetImageSupport::Supported(ImageProtocol::KittyLocalFile);
+        return ImageSupport::Supported(ImageProtocol::KittyLocalFile);
     }
 
     if is_iterm2_terminal(info) {
-        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld);
+        return ImageSupport::Unsupported(ImageUnsupportedReason::Iterm2TooOld);
     }
 
     if supports_kitty_graphics(info) {
-        return PetImageSupport::Supported(ImageProtocol::Kitty);
+        return ImageSupport::Supported(ImageProtocol::Kitty);
     }
 
     if supports_sixel(info) {
-        return PetImageSupport::Supported(ImageProtocol::Sixel);
+        return ImageSupport::Supported(ImageProtocol::Sixel);
     }
 
-    PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
+    ImageSupport::Unsupported(ImageUnsupportedReason::Terminal)
 }
 
 fn supports_iterm2_kitty_graphics(info: &TerminalInfo) -> bool {
@@ -391,7 +372,7 @@ mod tests {
 
         assert_eq!(
             ProtocolSelection::Auto.resolve(),
-            PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux)
+            ImageSupport::Unsupported(ImageUnsupportedReason::Tmux)
         );
     }
 
@@ -402,38 +383,38 @@ mod tests {
 
         assert_eq!(
             ProtocolSelection::Kitty.resolve(),
-            PetImageSupport::Supported(ImageProtocol::Kitty)
+            ImageSupport::Supported(ImageProtocol::Kitty)
         );
         assert_eq!(
             ProtocolSelection::Sixel.resolve(),
-            PetImageSupport::Supported(ImageProtocol::Sixel)
+            ImageSupport::Supported(ImageProtocol::Sixel)
         );
     }
 
     #[test]
-    fn pet_image_support_prefers_multiplexer_safety() {
+    fn image_support_prefers_multiplexer_safety() {
         assert_eq!(
-            pet_image_support_for_terminal(&terminal_info_for_test(
+            image_support_for_terminal(&terminal_info_for_test(
                 TerminalName::Ghostty,
                 Some(Multiplexer::Tmux { version: None }),
                 Some("Ghostty"),
                 /*term*/ None,
             )),
-            PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux)
+            ImageSupport::Unsupported(ImageUnsupportedReason::Tmux)
         );
         assert_eq!(
-            pet_image_support_for_terminal(&terminal_info_for_test(
+            image_support_for_terminal(&terminal_info_for_test(
                 TerminalName::Kitty,
                 Some(Multiplexer::Zellij { version: None }),
                 Some("kitty"),
                 /*term*/ None,
             )),
-            PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij)
+            ImageSupport::Unsupported(ImageUnsupportedReason::Zellij)
         );
     }
 
     #[test]
-    fn pet_image_support_detects_iterm2_kitty_file_graphics() {
+    fn image_support_detects_iterm2_kitty_file_graphics() {
         for info in [
             terminal_info_with_version_for_test(
                 TerminalName::Iterm2,
@@ -451,14 +432,14 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                pet_image_support_for_terminal(&info),
-                PetImageSupport::Supported(ImageProtocol::KittyLocalFile)
+                image_support_for_terminal(&info),
+                ImageSupport::Supported(ImageProtocol::KittyLocalFile)
             );
         }
     }
 
     #[test]
-    fn pet_image_support_rejects_old_iterm2_versions() {
+    fn image_support_rejects_old_iterm2_versions() {
         for info in [
             terminal_info_with_version_for_test(
                 TerminalName::Iterm2,
@@ -483,25 +464,24 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                pet_image_support_for_terminal(&info),
-                PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld)
+                image_support_for_terminal(&info),
+                ImageSupport::Unsupported(ImageUnsupportedReason::Iterm2TooOld)
             );
         }
     }
 
     #[test]
-    fn pet_image_support_old_iterm2_message_mentions_upgrade() {
-        let message = PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld)
-            .unsupported_message();
+    fn image_support_reports_old_iterm2_reason() {
+        let support = ImageSupport::Unsupported(ImageUnsupportedReason::Iterm2TooOld);
 
         assert_eq!(
-            message,
-            Some("Pets require iTerm2 3.6 or newer. Upgrade iTerm2 to use terminal pets.")
+            support.unsupported_reason(),
+            Some(ImageUnsupportedReason::Iterm2TooOld)
         );
     }
 
     #[test]
-    fn pet_image_support_detects_kitty_graphics_terminals() {
+    fn image_support_detects_kitty_graphics_terminals() {
         for info in [
             terminal_info_for_test(
                 TerminalName::Ghostty,
@@ -541,14 +521,14 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                pet_image_support_for_terminal(&info),
-                PetImageSupport::Supported(ImageProtocol::Kitty)
+                image_support_for_terminal(&info),
+                ImageSupport::Supported(ImageProtocol::Kitty)
             );
         }
     }
 
     #[test]
-    fn pet_image_support_detects_sixel_terminals() {
+    fn image_support_detects_sixel_terminals() {
         for info in [
             terminal_info_for_test(
                 TerminalName::Unknown,
@@ -576,15 +556,15 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                pet_image_support_for_terminal(&info),
-                PetImageSupport::Supported(ImageProtocol::Sixel)
+                image_support_for_terminal(&info),
+                ImageSupport::Supported(ImageProtocol::Sixel)
             );
         }
     }
 
     #[test]
     #[serial]
-    fn wezterm_env_uses_kitty_graphics_for_ambient_pets() {
+    fn wezterm_env_uses_kitty_graphics_for_terminal_images() {
         let _tmux = EnvVarGuard::new("TMUX", /*value*/ None);
         let _tmux_pane = EnvVarGuard::new("TMUX_PANE", /*value*/ None);
         let _zellij = EnvVarGuard::new("ZELLIJ", /*value*/ None);
@@ -595,21 +575,21 @@ mod tests {
         let _wezterm_executable = EnvVarGuard::new("WEZTERM_EXECUTABLE", /*value*/ None);
 
         assert_eq!(
-            detect_pet_image_support(),
-            PetImageSupport::Supported(ImageProtocol::Kitty)
+            detect_image_support(),
+            ImageSupport::Supported(ImageProtocol::Kitty)
         );
     }
 
     #[test]
-    fn pet_image_support_rejects_unknown_terminals() {
+    fn image_support_rejects_unknown_terminals() {
         assert_eq!(
-            pet_image_support_for_terminal(&terminal_info_for_test(
+            image_support_for_terminal(&terminal_info_for_test(
                 TerminalName::Unknown,
                 /*multiplexer*/ None,
                 /*term_program*/ None,
                 Some("xterm-256color"),
             )),
-            PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal)
+            ImageSupport::Unsupported(ImageUnsupportedReason::Terminal)
         );
     }
 

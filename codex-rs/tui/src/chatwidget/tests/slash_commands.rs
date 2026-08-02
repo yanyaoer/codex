@@ -4,26 +4,26 @@ use pretty_assertions::assert_eq;
 use serial_test::serial;
 
 fn force_pet_image_support(chat: &mut ChatWidget) {
-    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
-        crate::pets::ImageProtocol::Kitty,
+    chat.set_pet_image_support_for_tests(crate::terminal_image::ImageSupport::Supported(
+        crate::terminal_image::ImageProtocol::Kitty,
     ));
 }
 
 fn force_tmux_pet_image_unsupported(chat: &mut ChatWidget) {
-    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
-        crate::pets::PetImageUnsupportedReason::Tmux,
+    chat.set_pet_image_support_for_tests(crate::terminal_image::ImageSupport::Unsupported(
+        crate::terminal_image::ImageUnsupportedReason::Tmux,
     ));
 }
 
 fn force_terminal_pet_image_unsupported(chat: &mut ChatWidget) {
-    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
-        crate::pets::PetImageUnsupportedReason::Terminal,
+    chat.set_pet_image_support_for_tests(crate::terminal_image::ImageSupport::Unsupported(
+        crate::terminal_image::ImageUnsupportedReason::Terminal,
     ));
 }
 
 fn force_old_iterm2_pet_image_unsupported(chat: &mut ChatWidget) {
-    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
-        crate::pets::PetImageUnsupportedReason::Iterm2TooOld,
+    chat.set_pet_image_support_for_tests(crate::terminal_image::ImageSupport::Unsupported(
+        crate::terminal_image::ImageUnsupportedReason::Iterm2TooOld,
     ));
 }
 

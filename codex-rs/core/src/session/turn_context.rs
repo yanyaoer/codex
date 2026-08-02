@@ -10,6 +10,8 @@ use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -17,6 +19,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -161,6 +164,45 @@ pub struct TurnContext {
 enum TurnMultiAgentRuntime {
     ResolveAndStore,
     Preview,
+}
+
+fn prepare_visualization_dir(config: &Config, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
+    if !config.features.enabled(Feature::Artifact) {
+        return None;
+    }
+    let path = codex_protocol::visualization::thread_visualization_dir(
+        config.codex_home.as_path(),
+        thread_id,
+    )?;
+    if let Err(error) = std::fs::create_dir_all(&path) {
+        tracing::warn!(
+            error = %error,
+            path = %path.display(),
+            "failed to create thread visualization directory"
+        );
+        return None;
+    }
+    AbsolutePathBuf::from_absolute_path(path).ok()
+}
+
+fn grant_visualization_dir(
+    permission_profile: PermissionProfile,
+    cwd: &std::path::Path,
+    visualization_dir: Option<&AbsolutePathBuf>,
+) -> PermissionProfile {
+    let Some(visualization_dir) = visualization_dir else {
+        return permission_profile;
+    };
+    let enforcement = permission_profile.enforcement();
+    if enforcement != SandboxEnforcement::Managed {
+        return permission_profile;
+    }
+
+    let network = permission_profile.network_sandbox_policy();
+    let file_system = permission_profile
+        .file_system_sandbox_policy()
+        .with_additional_writable_roots(cwd, std::slice::from_ref(visualization_dir));
+    PermissionProfile::from_runtime_permissions_with_enforcement(enforcement, &file_system, network)
 }
 
 impl TurnContext {
@@ -531,7 +573,12 @@ impl Session {
             per_turn_config.features.enabled(Feature::FastMode),
             &model_info,
         );
-        let permission_profile = per_turn_config.permissions.effective_permission_profile();
+        let visualization_dir = prepare_visualization_dir(&per_turn_config, thread_id);
+        let permission_profile = grant_visualization_dir(
+            per_turn_config.permissions.effective_permission_profile(),
+            cwd.as_path(),
+            visualization_dir.as_ref(),
+        );
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -886,3 +933,7 @@ impl Session {
         state.session_configuration.clone()
     }
 }
+
+#[cfg(test)]
+#[path = "turn_context_tests.rs"]
+mod tests;

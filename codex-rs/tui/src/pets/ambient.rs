@@ -21,14 +21,18 @@ use anyhow::Context;
 use anyhow::Result;
 use ratatui::layout::Rect;
 
+use crate::terminal_image::DrawRequest;
+#[cfg(test)]
+use crate::terminal_image::ImageProtocol;
+use crate::terminal_image::ImageSupport;
+#[cfg(test)]
+use crate::terminal_image::ImageUnsupportedReason;
+#[cfg(not(test))]
+use crate::terminal_image::ProtocolSelection;
 use crate::tui::FrameRequester;
 
 use super::DEFAULT_PET_ID;
 use super::frames;
-use super::image_protocol::ImageProtocol;
-use super::image_protocol::PetImageSupport;
-#[cfg(not(test))]
-use super::image_protocol::ProtocolSelection;
 use super::model::Animation;
 #[cfg(test)]
 use super::model::AnimationFrame;
@@ -110,23 +114,10 @@ impl PetNotification {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AmbientPetDraw {
-    pub(crate) frame: PathBuf,
-    pub(crate) protocol: ImageProtocol,
-    pub(crate) x: u16,
-    pub(crate) y: u16,
-    pub(crate) clear_top_y: u16,
-    pub(crate) columns: u16,
-    pub(crate) rows: u16,
-    pub(crate) height_px: u16,
-    pub(crate) sixel_dir: PathBuf,
-}
-
 #[derive(Debug)]
 pub(crate) struct AmbientPet {
     pet: Pet,
-    support: PetImageSupport,
+    support: ImageSupport,
     frames: Vec<PathBuf>,
     sixel_dir: PathBuf,
     frame_requester: FrameRequester,
@@ -189,7 +180,7 @@ impl AmbientPet {
     }
 
     #[cfg(test)]
-    pub(crate) fn set_image_support_for_tests(&mut self, support: PetImageSupport) {
+    pub(crate) fn set_image_support_for_tests(&mut self, support: ImageSupport) {
         self.support = support;
     }
 
@@ -218,11 +209,7 @@ impl AmbientPet {
     /// fit the image without overlapping reserved UI. Callers should not try to
     /// partially clip the image themselves; that would desynchronize the image
     /// protocol output from the TUI's notion of cleared rows.
-    pub(crate) fn draw_request(
-        &self,
-        area: Rect,
-        composer_bottom_y: u16,
-    ) -> Option<AmbientPetDraw> {
+    pub(crate) fn draw_request(&self, area: Rect, composer_bottom_y: u16) -> Option<DrawRequest> {
         let protocol = self.support.protocol()?;
         let size = self.image_size();
         let notification = self.visible_notification(Instant::now());
@@ -235,7 +222,7 @@ impl AmbientPet {
 
         let x = area.x + area.width.saturating_sub(size.columns);
         let y = sprite_bottom_y.saturating_sub(size.rows);
-        Some(AmbientPetDraw {
+        Some(DrawRequest {
             frame: self.current_frame_path()?,
             protocol,
             x,
@@ -253,7 +240,7 @@ impl AmbientPet {
     /// The picker preview intentionally uses the first idle frame rather than
     /// the live animation state so selection browsing stays stable and does not
     /// require the full ambient animation lifecycle.
-    pub(crate) fn preview_draw_request(&self, area: Rect) -> Option<AmbientPetDraw> {
+    pub(crate) fn preview_draw_request(&self, area: Rect) -> Option<DrawRequest> {
         let protocol = self.support.protocol()?;
         let size = self.image_size();
         if area.width < size.columns || area.height < size.rows {
@@ -261,7 +248,7 @@ impl AmbientPet {
         }
 
         let y = area.y + area.height.saturating_sub(size.rows) / 2;
-        Some(AmbientPetDraw {
+        Some(DrawRequest {
             frame: self.first_idle_frame_path()?,
             protocol,
             x: area.x + area.width.saturating_sub(size.columns) / 2,
@@ -351,13 +338,13 @@ fn composer_gap_rows() -> u16 {
 }
 
 #[cfg(not(test))]
-fn default_image_support() -> PetImageSupport {
+fn default_image_support() -> ImageSupport {
     ProtocolSelection::Auto.resolve()
 }
 
 #[cfg(test)]
-fn default_image_support() -> PetImageSupport {
-    PetImageSupport::Unsupported(super::image_protocol::PetImageUnsupportedReason::Terminal)
+fn default_image_support() -> ImageSupport {
+    ImageSupport::Unsupported(ImageUnsupportedReason::Terminal)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -460,7 +447,7 @@ pub(crate) fn test_ambient_pet(
             frame_count: 72,
             animations: HashMap::from([("idle".to_string(), test_animation())]),
         },
-        support: PetImageSupport::Supported(ImageProtocol::Kitty),
+        support: ImageSupport::Supported(ImageProtocol::Kitty),
         frames: vec![PathBuf::from("frame-0.png"), PathBuf::from("frame-1.png")],
         sixel_dir: PathBuf::new(),
         frame_requester,

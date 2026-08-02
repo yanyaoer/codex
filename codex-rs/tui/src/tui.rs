@@ -95,6 +95,9 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 impl Drop for Tui {
     fn drop(&mut self) {
+        if let Err(err) = self.clear_artifact_preview_image() {
+            tracing::debug!(error = %err, "failed to clear artifact preview image on TUI drop");
+        }
         if let Err(err) = self.clear_ambient_pet_image() {
             tracing::debug!(error = %err, "failed to clear ambient pet image on TUI drop");
         }
@@ -572,8 +575,9 @@ pub struct Tui {
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<PendingHistoryLines>,
     screen_size: ScreenSizePolicy,
-    ambient_pet_image_state: crate::pets::PetImageRenderState,
-    pet_picker_preview_image_state: crate::pets::PetImageRenderState,
+    ambient_pet_image_state: crate::terminal_image::RenderState,
+    pet_picker_preview_image_state: crate::terminal_image::RenderState,
+    artifact_preview_image_state: crate::terminal_image::RenderState,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -630,8 +634,9 @@ impl Tui {
             terminal,
             pending_history_lines: vec![],
             screen_size: ScreenSizePolicy::default(),
-            ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
-            pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
+            ambient_pet_image_state: crate::terminal_image::RenderState::default(),
+            pet_picker_preview_image_state: crate::terminal_image::RenderState::default(),
+            artifact_preview_image_state: crate::terminal_image::RenderState::default(),
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -998,10 +1003,10 @@ impl Tui {
 
     pub fn draw_ambient_pet_image(
         &mut self,
-        request: Option<crate::pets::AmbientPetDraw>,
-    ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        request: Option<crate::terminal_image::DrawRequest>,
+    ) -> std::result::Result<(), crate::terminal_image::RenderError> {
         if let Err(err) = ensure_virtual_terminal_processing() {
-            return Err(crate::pets::PetImageRenderError::Terminal(err));
+            return Err(crate::terminal_image::RenderError::Terminal(err));
         }
 
         let terminal = &mut self.terminal;
@@ -1009,18 +1014,18 @@ impl Tui {
         stdout().sync_update(|_| {
             match crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request) {
                 Ok(()) => Ok(Ok(())),
-                Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
-                Err(err @ crate::pets::PetImageRenderError::Asset(_)) => Ok(Err(err)),
+                Err(crate::terminal_image::RenderError::Terminal(err)) => Err(err),
+                Err(err @ crate::terminal_image::RenderError::Asset(_)) => Ok(Err(err)),
             }
         })??
     }
 
     pub fn draw_pet_picker_preview_image(
         &mut self,
-        request: Option<crate::pets::AmbientPetDraw>,
-    ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        request: Option<crate::terminal_image::DrawRequest>,
+    ) -> std::result::Result<(), crate::terminal_image::RenderError> {
         if let Err(err) = ensure_virtual_terminal_processing() {
-            return Err(crate::pets::PetImageRenderError::Terminal(err));
+            return Err(crate::terminal_image::RenderError::Terminal(err));
         }
 
         let terminal = &mut self.terminal;
@@ -1032,22 +1037,61 @@ impl Tui {
                 request,
             ) {
                 Ok(()) => Ok(Ok(())),
-                Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
-                Err(err @ crate::pets::PetImageRenderError::Asset(_)) => Ok(Err(err)),
+                Err(crate::terminal_image::RenderError::Terminal(err)) => Err(err),
+                Err(err @ crate::terminal_image::RenderError::Asset(_)) => Ok(Err(err)),
+            }
+        })??
+    }
+
+    pub fn draw_artifact_preview_image(
+        &mut self,
+        request: Option<crate::terminal_image::DrawRequest>,
+    ) -> std::result::Result<(), crate::terminal_image::RenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::terminal_image::RenderError::Terminal(err));
+        }
+
+        let terminal = &mut self.terminal;
+        let state = &mut self.artifact_preview_image_state;
+        stdout().sync_update(|_| {
+            match crate::terminal_image::render(
+                terminal.backend_mut(),
+                state,
+                /*image_id*/ 0xC0E0,
+                request,
+            ) {
+                Ok(()) => Ok(Ok(())),
+                Err(crate::terminal_image::RenderError::Terminal(err)) => Err(err),
+                Err(err @ crate::terminal_image::RenderError::Asset(_)) => Ok(Err(err)),
             }
         })??
     }
 
     pub fn clear_ambient_pet_image(
         &mut self,
-    ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+    ) -> std::result::Result<(), crate::terminal_image::RenderError> {
         if let Err(err) = ensure_virtual_terminal_processing() {
-            return Err(crate::pets::PetImageRenderError::Terminal(err));
+            return Err(crate::terminal_image::RenderError::Terminal(err));
         }
 
         crate::pets::render_ambient_pet_image(
             self.terminal.backend_mut(),
             &mut self.ambient_pet_image_state,
+            /*request*/ None,
+        )
+    }
+
+    pub fn clear_artifact_preview_image(
+        &mut self,
+    ) -> std::result::Result<(), crate::terminal_image::RenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::terminal_image::RenderError::Terminal(err));
+        }
+
+        crate::terminal_image::render(
+            self.terminal.backend_mut(),
+            &mut self.artifact_preview_image_state,
+            /*image_id*/ 0xC0E0,
             /*request*/ None,
         )
     }

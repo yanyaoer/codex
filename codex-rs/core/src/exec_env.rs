@@ -6,11 +6,14 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::shell_environment;
 use std::collections::HashMap;
 
+use crate::config::Config;
+
 pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
 
 /// Informational name of the active permission profile. Child processes can
 /// overwrite this value, so it must not be treated as proof of enforcement.
 pub const CODEX_PERMISSION_PROFILE_ENV_VAR: &str = "CODEX_PERMISSION_PROFILE";
+pub const CODEX_VISUALIZATION_DIR_ENV_VAR: &str = "CODEX_VISUALIZATION_DIR";
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -47,6 +50,34 @@ pub(crate) fn inject_permission_profile_env(
         env.insert(
             CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
             active_permission_profile.id.clone(),
+        );
+    }
+}
+
+/// Expose the exact Codex-owned artifact root to tool processes when artifacts are enabled.
+pub(crate) fn inject_visualization_dir_env(
+    env: &mut HashMap<String, String>,
+    config: &Config,
+    thread_id: ThreadId,
+) {
+    if cfg!(windows) {
+        env.retain(|key, _| !key.eq_ignore_ascii_case(CODEX_VISUALIZATION_DIR_ENV_VAR));
+    } else {
+        env.remove(CODEX_VISUALIZATION_DIR_ENV_VAR);
+    }
+    if !config.features.enabled(codex_features::Feature::Artifact) {
+        return;
+    }
+    let Some(path) = codex_protocol::visualization::thread_visualization_dir(
+        config.codex_home.as_path(),
+        thread_id,
+    ) else {
+        return;
+    };
+    if path.is_dir() {
+        env.insert(
+            CODEX_VISUALIZATION_DIR_ENV_VAR.to_string(),
+            path.to_string_lossy().into_owned(),
         );
     }
 }

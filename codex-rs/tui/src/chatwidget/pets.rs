@@ -100,6 +100,9 @@ impl ChatWidget {
     }
 
     pub(super) fn ambient_pet_wrap_reserved_cols(&self) -> u16 {
+        if self.artifact_preview_image_enabled() {
+            return 0;
+        }
         self.ambient_pet
             .as_ref()
             .filter(|pet| pet.image_enabled())
@@ -170,27 +173,27 @@ impl ChatWidget {
 
     fn warn_if_pets_unsupported(&mut self) -> bool {
         let support = self.pet_image_support();
-        let Some(message) = support.unsupported_message() else {
+        let Some(reason) = support.unsupported_reason() else {
             return false;
         };
 
-        self.add_warning_message(message.to_string());
+        self.add_warning_message(crate::pets::image_unsupported_message(reason).to_string());
         true
     }
 
-    fn pet_image_support(&self) -> crate::pets::PetImageSupport {
+    fn pet_image_support(&self) -> crate::terminal_image::ImageSupport {
         #[cfg(test)]
         if let Some(support) = self.pet_image_support_override {
             return support;
         }
 
         #[cfg(test)]
-        return crate::pets::PetImageSupport::Unsupported(
-            crate::pets::PetImageUnsupportedReason::Terminal,
+        return crate::terminal_image::ImageSupport::Unsupported(
+            crate::terminal_image::ImageUnsupportedReason::Terminal,
         );
 
         #[cfg(not(test))]
-        crate::pets::detect_pet_image_support()
+        crate::terminal_image::detect_image_support()
     }
 
     /// Set the pet preselected by the TUI picker in the widget's config copy.
@@ -318,7 +321,7 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn set_pet_image_support_for_tests(
         &mut self,
-        support: crate::pets::PetImageSupport,
+        support: crate::terminal_image::ImageSupport,
     ) {
         self.pet_image_support_override = Some(support);
         self.apply_ambient_pet_image_support_override_for_tests();
