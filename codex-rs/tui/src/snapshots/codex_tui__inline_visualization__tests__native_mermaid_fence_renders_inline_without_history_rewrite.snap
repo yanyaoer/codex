@@ -1,0 +1,30 @@
+---
+source: tui/src/inline_visualization_tests.rs
+expression: "format!(\"rich:\\n{rich}\\n\\nraw:\\n{raw}\")"
+---
+rich:
+• Before
+
+<image row; uploads PNG>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+  [open/zoom]
+
+  After
+
+raw:
+Before
+
+```mermaid
+flowchart LR
+user --> agent --> tool
+```
+
+After

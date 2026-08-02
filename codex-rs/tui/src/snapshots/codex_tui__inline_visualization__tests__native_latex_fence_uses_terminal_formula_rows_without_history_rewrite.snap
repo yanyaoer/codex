@@ -1,0 +1,23 @@
+---
+source: tui/src/inline_visualization_tests.rs
+expression: "format!(\"rich:\\n{rich}\\n\\nraw:\\n{raw}\")"
+---
+rich:
+• Before
+
+<formula row; uploads transparent PNG>
+<formula row>
+<formula row>
+<formula row>
+  [open/zoom]
+
+  After
+
+raw:
+Before
+
+```latex
+E = mc^2
+```
+
+After

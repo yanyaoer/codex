@@ -6,6 +6,7 @@
 mod fs;
 
 use crate::bottom_pane::FeedbackAudience;
+use crate::inline_visualization::inline_visualization_compiler_tool_spec;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
 use crate::service_tier_resolution;
@@ -108,6 +109,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -1533,6 +1535,10 @@ fn thread_start_params_from_config(
         developer_instructions: with_terminal_visualization_instructions(
             config, /*control_instructions*/ None,
         ),
+        dynamic_tools: config
+            .features
+            .enabled(Feature::Artifact)
+            .then(|| vec![inline_visualization_compiler_tool_spec()]),
         ..ThreadStartParams::default()
     }
 }
@@ -2638,7 +2644,7 @@ mod tests {
             ResumeModelSettings::OverrideFromCurrentConfig,
         );
         let treatment_fork = thread_fork_params_from_config(
-            config,
+            config.clone(),
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
@@ -2659,6 +2665,59 @@ mod tests {
         assert_eq!(
             treatment_fork.developer_instructions.as_deref(),
             Some(expected.as_str())
+        );
+
+        let _ = config.features.enable(Feature::Artifact);
+        let artifact_start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let artifact_resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            ResumeModelSettings::OverrideFromCurrentConfig,
+        );
+        let artifact_fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+        let expected = format!(
+            "Developer override.\n\n{}",
+            crate::terminal_visualization_instructions::INLINE_VISUALIZATION_INSTRUCTIONS
+        );
+
+        assert_eq!(
+            artifact_start.developer_instructions.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            artifact_resume.developer_instructions.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            artifact_fork.developer_instructions.as_deref(),
+            Some(expected.as_str())
+        );
+        let [codex_app_server_protocol::DynamicToolSpec::Function(tool)] = artifact_start
+            .dynamic_tools
+            .as_deref()
+            .expect("Artifact should register the compiler tool for new threads")
+        else {
+            panic!("Artifact should register exactly one compiler function");
+        };
+        assert_eq!(
+            tool.name,
+            crate::inline_visualization::INLINE_VISUALIZATION_TOOL_NAME
+        );
+        assert_eq!(
+            tool.input_schema["properties"]["format"]["enum"],
+            serde_json::json!(["mermaid", "latex", "dot"])
         );
     }
 

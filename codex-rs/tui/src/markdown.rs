@@ -19,15 +19,17 @@
 //! buffers the entire fence body before deciding, only unwraps fences whose
 //! info string is `md` or `markdown` AND whose body contains a
 //! header+delimiter pair, and degrades gracefully on unclosed fences.
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
 use crate::inline_visualization::InlineVisualizationContext;
-use crate::inline_visualization::rewrite_inline_visualizations;
+use crate::inline_visualization::rewrite_inline_visualizations_for_terminal;
 use crate::table_detect;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 
 /// Render markdown source to styled ratatui lines and append them to `lines`.
 ///
@@ -87,7 +89,11 @@ pub(crate) fn render_markdown_agent_with_links_cwd_and_visualizations(
     cwd: Option<&Path>,
     inline_visualization_context: Option<&InlineVisualizationContext>,
 ) -> Vec<HyperlinkLine> {
-    let rewritten = rewrite_inline_visualizations(markdown_source, inline_visualization_context);
+    let rewritten = rewrite_inline_visualizations_for_terminal(
+        markdown_source,
+        inline_visualization_context,
+        width,
+    );
     let normalized = unwrap_markdown_fences(&rewritten.markdown);
     let is_hidden_link_destination =
         |destination: &str| rewritten.trusted_file_links.contains_key(destination);
@@ -103,7 +109,41 @@ pub(crate) fn render_markdown_agent_with_links_cwd_and_visualizations(
             hyperlink.retarget_to_trusted_file(&link.destination);
         }
     }
-    lines
+    if rewritten.trusted_inline_images.is_empty() {
+        return lines;
+    }
+
+    let mut images = rewritten.trusted_inline_images;
+    let mut rendered = Vec::with_capacity(lines.len());
+    for line in lines {
+        let marker = line
+            .line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let Some(image) = images.remove(&marker) else {
+            rendered.push(line);
+            continue;
+        };
+        for (index, placeholder) in image.image.placeholder_lines().into_iter().enumerate() {
+            let mut line = HyperlinkLine::new(placeholder);
+            if index == 0 {
+                line.inline_image = Some(image.image.clone());
+            }
+            rendered.push(line);
+        }
+        if let Some(destination) = image.open_destination {
+            let label = "[open/zoom]";
+            let mut line = HyperlinkLine::new(Line::from(label.cyan().underlined()));
+            line.hyperlinks.push(TerminalHyperlink::trusted_file(
+                0..label.len(),
+                &destination,
+            ));
+            rendered.push(line);
+        }
+    }
+    rendered
 }
 
 /// Render an agent message and collect the block metadata needed for incremental rendering.

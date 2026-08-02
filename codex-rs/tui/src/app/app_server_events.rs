@@ -10,11 +10,22 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
+use crate::inline_visualization::INLINE_VISUALIZATION_TOOL_NAME;
+use crate::inline_visualization::InlineVisualizationCompileArgs;
+use crate::inline_visualization::InlineVisualizationContext;
+use crate::inline_visualization::compile_inline_visualization;
+use crate::inline_visualization::inline_visualization_error_response;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::RateLimitReachedType;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_features::Feature;
+use codex_protocol::ThreadId;
+
+const INVALID_INLINE_VISUALIZATION_ARTIFACT_ID: &str = "<invalid>";
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -75,6 +86,10 @@ impl App {
             }
             ServerNotification::McpServerStatusUpdated(_) => {
                 self.refresh_mcp_startup_expected_servers_from_config();
+            }
+            ServerNotification::TurnCompleted(notification) => {
+                self.pending_app_server_requests
+                    .clear_inline_visualization_attempts(&notification.turn.id);
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 if matches!(
@@ -210,6 +225,31 @@ impl App {
             return;
         }
 
+        if let (Some(thread_id), ServerRequest::DynamicToolCall { request_id, params }) =
+            (thread_id, &request)
+            && params.namespace.is_none()
+            && params.tool == INLINE_VISUALIZATION_TOOL_NAME
+        {
+            if self.config.features.enabled(Feature::Artifact) {
+                self.start_inline_visualization_compile(
+                    thread_id,
+                    request_id.clone(),
+                    params.clone(),
+                );
+            } else {
+                self.app_event_tx
+                    .send(AppEvent::InlineVisualizationCompileFinished {
+                        request_id: request_id.clone(),
+                        response: inline_visualization_error_response(
+                            "inline visualization feature is disabled",
+                            /*retries_remaining*/ 0,
+                            /*retryable*/ false,
+                        ),
+                    });
+            }
+            return;
+        }
+
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)
@@ -248,5 +288,79 @@ impl App {
         if let Err(err) = result {
             tracing::warn!("failed to enqueue app-server request: {err}");
         }
+    }
+
+    fn start_inline_visualization_compile(
+        &mut self,
+        thread_id: ThreadId,
+        request_id: AppServerRequestId,
+        params: DynamicToolCallParams,
+    ) {
+        let arguments = match InlineVisualizationCompileArgs::parse(params.arguments) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                let response = match self
+                    .pending_app_server_requests
+                    .begin_inline_visualization_compile(
+                        &params.turn_id,
+                        INVALID_INLINE_VISUALIZATION_ARTIFACT_ID,
+                    ) {
+                    Ok(retries_remaining) => inline_visualization_error_response(
+                        error,
+                        retries_remaining,
+                        /*retryable*/ true,
+                    ),
+                    Err(limit) => inline_visualization_error_response(
+                        limit, /*retries_remaining*/ 0, /*retryable*/ false,
+                    ),
+                };
+                self.app_event_tx
+                    .send(AppEvent::InlineVisualizationCompileFinished {
+                        request_id,
+                        response,
+                    });
+                return;
+            }
+        };
+
+        let retries_remaining = match self
+            .pending_app_server_requests
+            .begin_inline_visualization_compile(&params.turn_id, &arguments.artifact_id)
+        {
+            Ok(retries_remaining) => retries_remaining,
+            Err(error) => {
+                self.app_event_tx
+                    .send(AppEvent::InlineVisualizationCompileFinished {
+                        request_id,
+                        response: inline_visualization_error_response(
+                            error, /*retries_remaining*/ 0, /*retryable*/ false,
+                        ),
+                    });
+                return;
+            }
+        };
+
+        let Some(context) = InlineVisualizationContext::from_config(&self.config, thread_id) else {
+            self.app_event_tx
+                .send(AppEvent::InlineVisualizationCompileFinished {
+                    request_id,
+                    response: inline_visualization_error_response(
+                        "could not create the inline visualization context",
+                        retries_remaining,
+                        /*retryable*/ false,
+                    ),
+                });
+            return;
+        };
+
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let response =
+                compile_inline_visualization(context, arguments, retries_remaining).await;
+            app_event_tx.send(AppEvent::InlineVisualizationCompileFinished {
+                request_id,
+                response,
+            });
+        });
     }
 }

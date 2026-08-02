@@ -385,9 +385,7 @@ mod tests {
 
         assert_eq!(
             context.inline_viz_renderer_program_from_exe(Some(&exe_path)),
-            target_dir
-                .path()
-                .join(INLINE_VIZ_RENDERER_EXECUTABLE_NAME)
+            target_dir.path().join(INLINE_VIZ_RENDERER_EXECUTABLE_NAME)
         );
         Ok(())
     }

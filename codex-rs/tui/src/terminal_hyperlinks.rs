@@ -3,6 +3,7 @@
 //! Layout code measures and wraps ordinary ratatui lines. Hyperlink annotations are applied only
 //! when text reaches a terminal buffer or scrollback writer so OSC 8 bytes never affect geometry.
 
+use std::fmt;
 use std::num::NonZeroU16;
 use std::ops::Range;
 
@@ -20,6 +21,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use url::Url;
 
+use crate::inline_image::InlineImage;
 use crate::line_truncation::line_width;
 use crate::render::line_utils::line_to_borrowed;
 use crate::render::line_utils::line_to_static;
@@ -50,6 +52,15 @@ impl TerminalHyperlink {
         }
     }
 
+    pub(crate) fn trusted_file(columns: Range<usize>, destination: &Url) -> Self {
+        debug_assert_eq!(destination.scheme(), "file");
+        Self {
+            columns,
+            destination: destination.to_string(),
+            destination_kind: DestinationKind::TrustedFile,
+        }
+    }
+
     pub(crate) fn retarget_to_trusted_file(&mut self, destination: &Url) {
         // Keep file URLs out of the general Markdown link path. Only generated visualization links
         // are promoted to this destination kind.
@@ -74,10 +85,24 @@ impl TerminalHyperlink {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub(crate) struct HyperlinkLine {
     pub(crate) line: Line<'static>,
     pub(crate) hyperlinks: Vec<TerminalHyperlink>,
+    /// Terminal-only upload metadata; it is never part of model-visible history.
+    pub(crate) inline_image: Option<InlineImage>,
+}
+
+impl fmt::Debug for HyperlinkLine {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("HyperlinkLine");
+        debug.field("line", &self.line);
+        debug.field("hyperlinks", &self.hyperlinks);
+        if let Some(inline_image) = &self.inline_image {
+            debug.field("inline_image", inline_image);
+        }
+        debug.finish()
+    }
 }
 
 impl HyperlinkLine {
@@ -85,6 +110,7 @@ impl HyperlinkLine {
         Self {
             line,
             hyperlinks: Vec::new(),
+            inline_image: None,
         }
     }
 
@@ -219,6 +245,9 @@ pub(crate) fn remap_wrapped_line(
     wrapped: Vec<Line<'static>>,
 ) -> Vec<HyperlinkLine> {
     let mut out = plain_hyperlink_lines(wrapped);
+    if let Some(first) = out.first_mut() {
+        first.inline_image.clone_from(&source.inline_image);
+    }
     if source.hyperlinks.is_empty() {
         return out;
     }
@@ -682,6 +711,7 @@ mod tests {
                 /*columns*/ 0..usize::from(destination.cell_width()),
                 destination.to_string(),
             )],
+            inline_image: None,
         };
 
         assert_eq!(
@@ -747,6 +777,7 @@ mod tests {
                         /*columns*/ 10..14,
                         "https://example.com/first".to_string(),
                     )],
+                    inline_image: None,
                 },
                 HyperlinkLine {
                     line: Line::from("    middle there end"),
@@ -754,6 +785,7 @@ mod tests {
                         /*columns*/ 11..16,
                         "https://example.com/second".to_string(),
                     )],
+                    inline_image: None,
                 },
             ]
         );
@@ -968,6 +1000,7 @@ mod tests {
         let line = HyperlinkLine {
             line: Line::from("view"),
             hyperlinks: vec![link],
+            inline_image: None,
         };
 
         assert_eq!(

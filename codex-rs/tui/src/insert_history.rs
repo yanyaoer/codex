@@ -285,6 +285,9 @@ fn write_history_line<W: Write>(
     line: &HyperlinkLine,
     wrap_width: usize,
 ) -> io::Result<()> {
+    if let Some(inline_image) = &line.inline_image {
+        inline_image.write_transmission(writer)?;
+    }
     let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
     if physical_rows > 1 {
         queue!(writer, SavePosition)?;
@@ -324,6 +327,7 @@ fn write_history_line<W: Write>(
     let merged_line = HyperlinkLine {
         line: Line::from(merged_spans),
         hyperlinks: line.hyperlinks.clone(),
+        inline_image: line.inline_image.clone(),
     };
     let decorated = decorate_spans(&merged_line);
     write_spans(writer, decorated.iter())
@@ -527,6 +531,32 @@ mod tests {
         let output = String::from_utf8(actual).expect("UTF-8 terminal output");
         assert!(output.contains("\x1b]8;;https://example.com/long/path\x07"));
         assert_eq!(line.line.spans[0].content, destination);
+    }
+
+    #[test]
+    fn writes_inline_image_upload_before_visible_cells() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("image.png");
+        std::fs::write(&path, b"png").expect("write image");
+        let image = crate::inline_image::InlineImage::new(
+            path,
+            b"content digest",
+            /*width_px*/ 64,
+            /*height_px*/ 32,
+            /*available_width*/ 20,
+            crate::inline_image::KittyTransport::Direct,
+        )
+        .expect("inline image");
+        let mut line = HyperlinkLine::new(Line::from("placeholder"));
+        line.inline_image = Some(image);
+        let mut actual = Vec::new();
+
+        write_history_line(&mut actual, &line, /*wrap_width*/ 80).expect("write history line");
+
+        let output = String::from_utf8(actual).expect("UTF-8 terminal output");
+        let upload = output.find("\x1b_Ga=T,U=1").expect("Kitty upload");
+        let placeholder = output.find("placeholder").expect("visible cells");
+        assert!(upload < placeholder);
     }
 
     #[test]

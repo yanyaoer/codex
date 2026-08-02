@@ -22,6 +22,43 @@ fn context_with_fragment(fragment: &str) -> (TempDir, InlineVisualizationContext
     (codex_home, context)
 }
 
+fn context_with_native_image(
+    format: native::NativeArtifactFormat,
+    source: &str,
+) -> (TempDir, InlineVisualizationContext) {
+    let codex_home = tempfile::tempdir().expect("temp codex home");
+    let mut context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
+        .expect("UUIDv7 thread id should provide a timestamp");
+    fs::create_dir_all(&context.thread_dir).expect("create visualization directory");
+    let mut image = image::RgbaImage::new(64, 32);
+    for y in 8..24 {
+        for x in 12..52 {
+            image.put_pixel(x, y, image::Rgba([20, 80, 200, 255]));
+        }
+    }
+    image
+        .save_with_format(
+            context
+                .thread_dir
+                .join(native::artifact_file(format, source)),
+            image::ImageFormat::Png,
+        )
+        .expect("write native PNG");
+    context.kitty_transport = Some(KittyTransport::Direct);
+    context.native_rendering_enabled = true;
+    context.diagram_palette = diagram::DiagramPalette {
+        foreground: (230, 230, 230),
+        background: (30, 30, 30),
+        accent: (137, 180, 250),
+    };
+    context.formula_style = formula::FormulaStyle {
+        foreground: (210, 220, 230),
+        cell_width_px: 8,
+        cell_height_px: 16,
+    };
+    (codex_home, context)
+}
+
 #[test]
 fn granted_visualization_root_overrides_thread_id_derived_root() {
     let codex_home = tempfile::tempdir().expect("temp codex home");
@@ -49,6 +86,37 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect()
+}
+
+fn normalized_inline_image_text(
+    lines: &[crate::terminal_hyperlinks::HyperlinkLine],
+    uploaded: &str,
+    continuation: &str,
+) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    uploaded.to_string()
+                } else {
+                    continuation.to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn raw_cell_text(cell: &AgentMarkdownCell) -> String {
+    cell.raw_lines()
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn buffer_to_text(buffer: &Buffer, width: u16) -> String {
@@ -274,6 +342,150 @@ fn finalized_agent_cell_replays_visualization_link() {
             .iter()
             .all(|destination| destination.starts_with("file://"))
     );
+}
+
+#[test]
+fn native_mermaid_fence_renders_inline_without_rewriting_raw_history() {
+    let diagram = "flowchart LR\nuser --> agent --> tool\n";
+    let (_codex_home, context) =
+        context_with_native_image(native::NativeArtifactFormat::Mermaid, diagram);
+    let source = format!("Before\n\n```mermaid\n{diagram}```\n\nAfter\n");
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.clone(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rendered = cell.display_hyperlink_lines(/*width*/ 40);
+    let rich = normalized_inline_image_text(&rendered, "<image row; uploads PNG>", "<image row>");
+    let raw = raw_cell_text(&cell);
+
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+    let zoom_link = rendered
+        .iter()
+        .find(|line| line_text(&line.line).contains("[open/zoom]"))
+        .expect("zoom link directly below diagram");
+    let zoom_url = url::Url::parse(&zoom_link.hyperlinks[0].destination).expect("file URL");
+    let zoom = image::open(zoom_url.to_file_path().expect("local zoom path"))
+        .expect("decode prepared zoom image")
+        .into_rgba8();
+    assert_eq!(zoom.get_pixel(0, 0).0, [30, 30, 30, 255]);
+    assert!(zoom.pixels().all(|pixel| pixel.0[3] == 255));
+    assert_eq!(raw, source.trim_end());
+    insta::assert_snapshot!(
+        "native_mermaid_fence_renders_inline_without_history_rewrite",
+        format!("rich:\n{rich}\n\nraw:\n{raw}")
+    );
+}
+
+#[test]
+fn native_latex_fence_uses_terminal_formula_rows_without_history_rewrite() {
+    let formula = "E = mc^2\n";
+    let (_codex_home, context) =
+        context_with_native_image(native::NativeArtifactFormat::Latex, formula);
+    let source = format!("Before\n\n```latex\n{formula}```\n\nAfter\n");
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.clone(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rendered = cell.display_hyperlink_lines(/*width*/ 40);
+    let zoom_link = rendered
+        .iter()
+        .find(|line| line_text(&line.line).contains("[open/zoom]"))
+        .expect("zoom link directly below formula");
+    let zoom_span = zoom_link
+        .line
+        .spans
+        .iter()
+        .find(|span| span.content == "[open/zoom]")
+        .expect("styled zoom label");
+    assert_eq!(zoom_span.style, Style::new().cyan().underlined());
+    assert_eq!(zoom_link.hyperlinks.len(), 1);
+    let zoom_url = url::Url::parse(&zoom_link.hyperlinks[0].destination).expect("file URL");
+    assert_eq!(zoom_url.scheme(), "file");
+    assert!(zoom_url.to_file_path().expect("local zoom path").is_file());
+    let rich = normalized_inline_image_text(
+        &rendered,
+        "<formula row; uploads transparent PNG>",
+        "<formula row>",
+    );
+    let raw = raw_cell_text(&cell);
+
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| line_text(&line.line).contains('\u{10eeee}'))
+            .count(),
+        4
+    );
+    assert_eq!(raw, source.trim_end());
+    insta::assert_snapshot!(
+        "native_latex_fence_uses_terminal_formula_rows_without_history_rewrite",
+        format!("rich:\n{rich}\n\nraw:\n{raw}")
+    );
+}
+
+#[test]
+fn missing_native_png_and_unsupported_d2_keep_source_visible() {
+    let codex_home = tempfile::tempdir().expect("temp codex home");
+    let mut context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
+        .expect("visualization context");
+    context.kitty_transport = Some(KittyTransport::Direct);
+    context.native_rendering_enabled = true;
+    let source = "```mermaid\nflowchart LR\na --> b\n```\n\n```d2\na -> b\n```\n";
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.to_string(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rendered = cell.display_hyperlink_lines(/*width*/ 40);
+    let text = rendered
+        .iter()
+        .map(|line| line_text(&line.line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.iter().all(|line| line.inline_image.is_none()));
+    assert!(text.contains("flowchart LR"));
+    assert!(text.contains("a -> b"));
+    assert_eq!(raw_cell_text(&cell), source.trim_end());
+}
+
+#[test]
+fn cached_native_image_survives_resume_and_formula_reflows_on_resize() {
+    let formula = "x^2 + y^2 = z^2\n";
+    let (_codex_home, mut context) =
+        context_with_native_image(native::NativeArtifactFormat::Latex, formula);
+    // Resumed sessions do not need rendering permission to display an already-validated artifact.
+    context.native_rendering_enabled = false;
+    let source = format!("```latex\n{formula}```\n");
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.clone(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let wide = cell.display_hyperlink_lines(/*width*/ 40);
+    let narrow = cell.display_hyperlink_lines(/*width*/ 12);
+    let uploaded_width = |lines: &[crate::terminal_hyperlinks::HyperlinkLine]| {
+        lines
+            .iter()
+            .find(|line| line.inline_image.is_some())
+            .map(|line| crate::width::display_width(&line_text(&line.line)))
+            .expect("cached formula should render inline")
+    };
+
+    assert!(uploaded_width(&wide) > uploaded_width(&narrow));
+    assert_eq!(raw_cell_text(&cell), source.trim_end());
 }
 
 #[test]

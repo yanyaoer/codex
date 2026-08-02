@@ -354,6 +354,24 @@ impl App {
                 self.chat_widget.note_stream_consolidation_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
+            AppEvent::InlineVisualizationsReady => {
+                self.finish_required_stream_reflow(tui)?;
+            }
+            AppEvent::InlineVisualizationCompileFinished {
+                request_id,
+                response,
+            } => {
+                let result = serde_json::to_value(response).map_err(|error| {
+                    color_eyre::eyre::eyre!(
+                        "failed to serialize inline visualization compiler response: {error}"
+                    )
+                })?;
+                if let Err(error) = app_server.resolve_server_request(request_id, result).await {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to return inline visualization compiler result: {error}"
+                    ));
+                }
+            }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
                 let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
