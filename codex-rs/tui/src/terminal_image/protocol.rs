@@ -121,23 +121,66 @@ pub(crate) fn detect_image_support() -> ImageSupport {
 }
 
 fn tmux_env_is_active() -> bool {
-    if env::var_os("TMUX").is_none() && env::var_os("TMUX_PANE").is_none() {
-        return false;
+    #[cfg(test)]
+    {
+        detect_active_tmux()
     }
-
-    let term_program = env::var("TERM_PROGRAM").ok();
-    let term = env::var("TERM").ok();
-    !has_direct_terminal_fingerprint(term_program.as_deref(), term.as_deref())
+    #[cfg(not(test))]
+    {
+        static ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ACTIVE.get_or_init(detect_active_tmux)
+    }
 }
 
-fn has_direct_terminal_fingerprint(term_program: Option<&str>, term: Option<&str>) -> bool {
-    if terminal_field_contains(term, "tmux") || terminal_field_contains(term, "screen") {
+fn detect_active_tmux() -> bool {
+    let Some(pane) = env::var("TMUX_PANE").ok().filter(|pane| !pane.is_empty()) else {
+        return false;
+    };
+    if env::var_os("TMUX").is_none() {
         return false;
     }
 
-    ["ghostty", "kitty", "wezterm"].into_iter().any(|terminal| {
-        terminal_field_contains(term_program, terminal) && terminal_field_contains(term, terminal)
+    let term = env::var("TERM").ok();
+    active_tmux_from_probe(term.as_deref(), tmux_pane_matches_stdout(&pane))
+}
+
+fn active_tmux_from_probe(term: Option<&str>, pane_matches_stdout: Option<bool>) -> bool {
+    pane_matches_stdout.unwrap_or_else(|| {
+        terminal_field_contains(term, "tmux") || terminal_field_contains(term, "screen")
     })
+}
+
+fn tmux_pane_matches_stdout(pane: &str) -> Option<bool> {
+    let output = std::process::Command::new("tmux")
+        .args(["display-message", "-p", "-t", pane, "#{pane_tty}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let pane_tty = std::str::from_utf8(&output.stdout).ok()?.trim();
+    if pane_tty.is_empty() {
+        return None;
+    }
+    tty_paths_match(Path::new("/dev/fd/1"), Path::new(pane_tty))
+}
+
+#[cfg(unix)]
+fn tty_paths_match(current: &Path, pane: &Path) -> Option<bool> {
+    use std::os::unix::fs::FileTypeExt as _;
+    use std::os::unix::fs::MetadataExt as _;
+
+    let current = fs::metadata(current).ok()?;
+    let pane = fs::metadata(pane).ok()?;
+    if !current.file_type().is_char_device() || !pane.file_type().is_char_device() {
+        return None;
+    }
+    Some(current.rdev() == pane.rdev())
+}
+
+#[cfg(not(unix))]
+fn tty_paths_match(_current: &Path, _pane: &Path) -> Option<bool> {
+    None
 }
 
 fn tmux_allows_passthrough() -> bool {
@@ -426,6 +469,19 @@ mod tests {
     }
 
     #[test]
+    fn tmux_probe_prefers_tty_identity_and_uses_term_only_as_fallback() {
+        assert_eq!(
+            [
+                active_tmux_from_probe(Some("tmux-256color"), Some(true)),
+                active_tmux_from_probe(Some("tmux-256color"), Some(false)),
+                active_tmux_from_probe(Some("tmux-256color"), None),
+                active_tmux_from_probe(Some("xterm-kitty"), None),
+            ],
+            [true, false, true, false]
+        );
+    }
+
+    #[test]
     fn parses_protocol_selection() {
         assert_eq!(
             "auto".parse::<ProtocolSelection>().unwrap(),
@@ -501,6 +557,26 @@ mod tests {
             ImageSupport::Supported(ImageProtocol::Kitty)
         );
         assert_eq!(wrap_for_tmux_if_needed("\x1b_Gx;\x1b\\"), "\x1b_Gx;\x1b\\");
+    }
+
+    #[test]
+    #[serial]
+    fn stale_tmux_env_from_direct_kitty_does_not_wrap_images() {
+        let _tmux = EnvVarGuard::new("TMUX", Some("/tmp/codex-missing-tmux/default,123,0"));
+        let _tmux_pane = EnvVarGuard::new("TMUX_PANE", Some("%8"));
+        let _term_program = EnvVarGuard::new("TERM_PROGRAM", Some("tmux"));
+        let _term = EnvVarGuard::new("TERM", Some("xterm-kitty"));
+        let _kitty = EnvVarGuard::new("KITTY_WINDOW_ID", Some("27"));
+        let _zellij = EnvVarGuard::new("ZELLIJ", /*value*/ None);
+        let _zellij_session = EnvVarGuard::new("ZELLIJ_SESSION_NAME", /*value*/ None);
+        let _zellij_version = EnvVarGuard::new("ZELLIJ_VERSION", /*value*/ None);
+
+        assert_eq!(
+            detect_image_support(),
+            ImageSupport::Supported(ImageProtocol::Kitty)
+        );
+        let command = format!("{ESC}_Gx;{ST}");
+        assert_eq!(wrap_for_tmux_if_needed(&command), command);
     }
 
     #[test]
