@@ -1,0 +1,12 @@
+---
+source: tui/src/inline_visualization_tests.rs
+expression: rendered
+---
+• Rendered and
+  verified.
+
+<image row; uploads PNG>
+<image row>
+<image row>
+<image row>
+<image row>

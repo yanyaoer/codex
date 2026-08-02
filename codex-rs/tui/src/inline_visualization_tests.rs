@@ -349,7 +349,53 @@ fn rich_agent_cell_replaces_adjacent_d2_artifact_without_rewriting_raw_history()
 }
 
 #[test]
-fn rich_agent_cell_replaces_latex_but_not_non_adjacent_or_invalid_artifacts() {
+fn standalone_png_directive_uses_the_skill_output_contract() {
+    let (_codex_home, context) = context_with_image("diagram.png");
+    let source = "Rendered and verified.\n\n::codex-inline-vis{file=\"diagram.png\"}";
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.to_string(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+    let lines = cell.display_hyperlink_lines(/*width*/ 20);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+    assert!(lines.iter().all(|line| line.hyperlinks.is_empty()));
+    let rendered = lines
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    "<image row; uploads PNG>".to_string()
+                } else {
+                    "<image row>".to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!("standalone_png_directive_renders_inline", rendered);
+    assert_eq!(
+        cell.raw_lines()
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        source
+    );
+}
+
+#[test]
+fn rich_agent_cell_replaces_latex_and_standalone_directives() {
     let (_codex_home, context) = context_with_image("formula.png");
     let latex_lines = render_artifact(
         "```latex\nE = mc^2\n```\n::codex-inline-vis{file=\"formula.png\"}",
@@ -367,7 +413,20 @@ fn rich_agent_cell_replaces_latex_but_not_non_adjacent_or_invalid_artifacts() {
         "```d2\na -> b\n```\nExplanation.\n::codex-inline-vis{file=\"formula.png\"}",
         &context,
     );
-    assert!(non_adjacent.iter().all(|line| line.inline_image.is_none()));
+    assert_eq!(
+        non_adjacent
+            .iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+    let non_adjacent_text = non_adjacent
+        .iter()
+        .map(|line| line_text(&line.line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(non_adjacent_text.contains("a -> b"));
+    assert!(non_adjacent_text.contains("Explanation."));
 
     let artifact_dir = context.artifact_dir.as_ref().expect("artifact directory");
     fs::write(artifact_dir.join("invalid.png"), b"not a PNG").expect("write invalid PNG");

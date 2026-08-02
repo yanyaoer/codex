@@ -290,7 +290,7 @@ fn rewrite_inline_visualizations_impl<'a>(
         };
     }
 
-    let (markdown, trusted_inline_images) = match (context, available_width) {
+    let (markdown, mut trusted_inline_images) = match (context, available_width) {
         (Some(context), Some(available_width)) => {
             replace_artifact_blocks(markdown, context, available_width)
         }
@@ -313,7 +313,13 @@ fn rewrite_inline_visualizations_impl<'a>(
         if is_code || !trimmed.starts_with(DIRECTIVE_PREFIX) {
             rewritten.push_str(line);
         } else if let Some(file) = parse_directive_file(trimmed) {
-            if let Some(destination) = context.and_then(|context| context.link_for(file)) {
+            if let Some(image) = available_width
+                .and_then(|width| context.and_then(|context| context.inline_image_for(file, width)))
+            {
+                let marker = image_placeholder();
+                rewritten.push_str(&format!("```{MARKDOWN_LANGUAGE}\n{marker}\n```"));
+                trusted_inline_images.insert(marker, image);
+            } else if let Some(destination) = context.and_then(|context| context.link_for(file)) {
                 let placeholder = link_placeholder();
                 let (markdown_label, display_label) = visualization_link_labels(file);
                 let markdown_destination_label = escape_markdown_label(destination.as_str());
