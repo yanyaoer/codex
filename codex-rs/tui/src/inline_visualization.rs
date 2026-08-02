@@ -1,6 +1,11 @@
-//! Render-only handling for assistant-authored inline visualization directives.
+//! Render-only handling for assistant-authored inline visualization artifacts.
 
+mod native;
+mod setup;
 mod viewer;
+
+pub use setup::InlineVisualizationSetupReport;
+pub use setup::setup_inline_visualizations;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -44,9 +49,10 @@ const DEFAULT_INLINE_WIDTH: usize = 100;
 pub(crate) struct InlineVisualizationContext {
     visualizations_dir: PathBuf,
     thread_dir: PathBuf,
-    artifact_dir: Option<PathBuf>,
     image_cache_dir: PathBuf,
+    managed_bin_dir: PathBuf,
     kitty_transport: Option<KittyTransport>,
+    native_rendering_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -59,7 +65,10 @@ struct ValidatedImage {
 
 impl InlineVisualizationContext {
     pub(crate) fn new(codex_home: &Path, thread_id: ThreadId) -> Option<Self> {
-        Self::new_with_writable_roots(codex_home, thread_id, std::iter::empty())
+        let mut context = Self::new_with_writable_roots(codex_home, thread_id, std::iter::empty())?;
+        // Replay is read-only, but cached native artifacts should remain visible after resume.
+        context.kitty_transport = detect_kitty_transport();
+        Some(context)
     }
 
     pub(crate) fn from_config(
@@ -75,9 +84,9 @@ impl InlineVisualizationContext {
             thread_id,
             writable_roots.iter().map(|root| root.root.as_path()),
         )?;
-        if config.features.enabled(codex_features::Feature::Artifact) && config.cwd.is_absolute() {
-            context.artifact_dir = Some(config.cwd.to_path_buf());
+        if config.features.enabled(codex_features::Feature::Artifact) {
             context.kitty_transport = detect_kitty_transport();
+            context.native_rendering_enabled = true;
         }
         Some(context)
     }
@@ -106,26 +115,25 @@ impl InlineVisualizationContext {
         Some(Self {
             visualizations_dir,
             thread_dir,
-            artifact_dir: None,
             image_cache_dir: codex_home.join("cache").join("tui-visualizations"),
+            managed_bin_dir: native::managed_bin_dir(codex_home),
             kitty_transport: None,
+            native_rendering_enabled: false,
         })
     }
 
     fn link_for(&self, file: &str) -> Option<Url> {
         let relative = single_file(file)?;
-        match relative
+        if relative
             .extension()
             .and_then(|extension| extension.to_str())
+            != Some("html")
         {
-            Some("html") => {
-                let (fragment_path, thread_dir) = self.canonical_thread_file(relative)?;
-                let viewer_path = materialize_document(&fragment_path, &thread_dir).ok()?;
-                Url::from_file_path(viewer_path).ok()
-            }
-            Some("png") => Url::from_file_path(self.validated_image(file)?.path).ok(),
-            _ => None,
+            return None;
         }
+        let (fragment_path, thread_dir) = self.canonical_thread_file(relative)?;
+        let viewer_path = materialize_document(&fragment_path, &thread_dir).ok()?;
+        Url::from_file_path(viewer_path).ok()
     }
 
     fn canonical_thread_file(&self, relative: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -150,11 +158,10 @@ impl InlineVisualizationContext {
         {
             return None;
         }
-        let artifact_dir = fs::canonicalize(self.artifact_dir.as_ref()?).ok()?;
-        let source_path = fs::canonicalize(artifact_dir.join(relative)).ok()?;
-        if !source_path.starts_with(&artifact_dir) {
+        if !native::is_native_artifact_file(file) {
             return None;
         }
+        let source_path = self.canonical_thread_file(relative)?.0;
 
         let metadata = fs::metadata(&source_path).ok()?;
         if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
@@ -217,6 +224,14 @@ impl InlineVisualizationContext {
             available_width,
             transport,
         )
+    }
+
+    pub(crate) fn has_native_artifacts(&self, markdown: &str) -> bool {
+        self.native_rendering_enabled && native::contains_artifact_blocks(markdown)
+    }
+
+    pub(crate) async fn render_native_artifacts(&self, markdown: &str) -> usize {
+        native::render_artifacts(self, markdown).await
     }
 }
 
@@ -282,7 +297,7 @@ fn rewrite_inline_visualizations_impl<'a>(
     context: Option<&InlineVisualizationContext>,
     available_width: Option<usize>,
 ) -> InlineVisualizationRewrite<'a> {
-    if !markdown.contains(DIRECTIVE_PREFIX) {
+    if !requires_dynamic_render(markdown) {
         return InlineVisualizationRewrite {
             markdown: Cow::Borrowed(markdown),
             trusted_file_links: HashMap::new(),
@@ -356,6 +371,12 @@ struct ArtifactReplacement {
     image: InlineImage,
 }
 
+struct ArtifactCandidate {
+    start: usize,
+    format: native::NativeArtifactFormat,
+    source: String,
+}
+
 fn replace_artifact_blocks<'a>(
     markdown: &'a str,
     context: &InlineVisualizationContext,
@@ -363,7 +384,7 @@ fn replace_artifact_blocks<'a>(
 ) -> (Cow<'a, str>, HashMap<String, InlineImage>) {
     let mut replacements = Vec::new();
     let mut container_depth = 0usize;
-    let mut candidate_start = None;
+    let mut candidate = None;
     for (event, range) in Parser::new_ext(markdown, Options::empty()).into_offset_iter() {
         match event {
             Event::Start(
@@ -375,20 +396,30 @@ fn replace_artifact_blocks<'a>(
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
                 if container_depth == 0 && is_artifact_language(&language) =>
             {
-                candidate_start = Some(range.start);
+                candidate =
+                    native::format_from_language(&language).map(|format| ArtifactCandidate {
+                        start: range.start,
+                        format,
+                        source: String::new(),
+                    });
+            }
+            Event::Text(text) => {
+                if let Some(candidate) = candidate.as_mut() {
+                    candidate.source.push_str(&text);
+                }
             }
             Event::End(TagEnd::CodeBlock) => {
-                let Some(start) = candidate_start.take() else {
+                let Some(candidate) = candidate.take() else {
                     continue;
                 };
-                let Some((directive_end, file)) = adjacent_directive(markdown, range.end) else {
-                    continue;
-                };
-                let Some(image) = context.inline_image_for(file, available_width) else {
+                let end = adjacent_directive(markdown, range.end)
+                    .map_or(range.end, |(directive_end, _)| directive_end);
+                let file = native::artifact_file(candidate.format, &candidate.source);
+                let Some(image) = context.inline_image_for(&file, available_width) else {
                     continue;
                 };
                 replacements.push(ArtifactReplacement {
-                    range: start..directive_end,
+                    range: candidate.start..end,
                     marker: image_placeholder(),
                     image,
                 });
@@ -422,14 +453,11 @@ fn replace_artifact_blocks<'a>(
 }
 
 fn is_artifact_language(language: &str) -> bool {
-    language
-        .split([',', ' ', '\t'])
-        .next()
-        .is_some_and(|language| {
-            language.eq_ignore_ascii_case("d2")
-                || language.eq_ignore_ascii_case("mermaid")
-                || language.eq_ignore_ascii_case("latex")
-        })
+    native::format_from_language(language).is_some()
+}
+
+pub(crate) fn requires_dynamic_render(markdown: &str) -> bool {
+    markdown.contains(DIRECTIVE_PREFIX) || native::contains_artifact_blocks(markdown)
 }
 
 fn adjacent_directive(markdown: &str, block_end: usize) -> Option<(usize, &str)> {

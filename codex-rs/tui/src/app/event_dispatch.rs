@@ -354,6 +354,9 @@ impl App {
                 self.chat_widget.note_stream_consolidation_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
+            AppEvent::InlineVisualizationsReady => {
+                self.finish_required_stream_reflow(tui)?;
+            }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
                 let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(

@@ -75,6 +75,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_home::CodexHomeUserInstructionsProvider;
@@ -163,6 +164,10 @@ enum Subcommand {
     /// Diagnose local Codex installation, config, auth, and runtime health.
     Doctor(DoctorCommand),
 
+    /// Install or verify native inline-visualization support.
+    #[clap(name = "inline-viz-setup")]
+    InlineVizSetup(InlineVizSetupCommand),
+
     /// Run commands within a Codex-provided sandbox.
     Sandbox(HostSandboxArgs),
 
@@ -216,6 +221,13 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct InlineVizSetupCommand {
+    /// Verify dependencies without installing anything.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -1447,6 +1459,38 @@ async fn cli_main(
             )
             .await?;
         }
+        Some(Subcommand::InlineVizSetup(command)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "inline-viz-setup",
+            )?;
+            let codex_home = find_codex_home()?;
+            let report =
+                codex_tui::setup_inline_visualizations(codex_home.as_path(), command.check).await?;
+            for line in report.lines {
+                println!("{line}");
+            }
+            if !report.ready {
+                anyhow::bail!("inline visualization setup is incomplete");
+            }
+            if command.check {
+                let config = ConfigBuilder::default()
+                    .codex_home(codex_home.to_path_buf())
+                    .build()
+                    .await?;
+                if !config.features.enabled(Feature::Artifact) {
+                    anyhow::bail!("inline visualization is disabled; run `codex inline-viz-setup`");
+                }
+                println!("READY   Native inline visualization feature is enabled.");
+            } else {
+                ConfigEditsBuilder::new(&codex_home)
+                    .set_feature_enabled(Feature::Artifact.key(), /*enabled*/ true)
+                    .apply()
+                    .await?;
+                println!("Enabled native inline visualization in config.toml.");
+            }
+        }
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -2228,6 +2272,7 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::Logout(_)) => Some("logout"),
         Some(Subcommand::Completion(_)) => Some("completion"),
         Some(Subcommand::Update) => Some("update"),
+        Some(Subcommand::InlineVizSetup(_)) => Some("inline-viz-setup"),
         Some(Subcommand::Cloud(_)) => Some("cloud"),
         Some(Subcommand::Sandbox(_)) => Some("sandbox"),
         Some(Subcommand::Debug(_)) => Some("debug"),
@@ -3254,6 +3299,18 @@ mod tests {
     fn update_parses_as_update_subcommand() {
         let cli = MultitoolCli::try_parse_from(["codex", "update"]).expect("parse");
         assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
+    }
+
+    #[test]
+    fn inline_viz_setup_check_parses() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "inline-viz-setup", "--check"]).expect("parse");
+        assert!(matches!(
+            cli.subcommand,
+            Some(Subcommand::InlineVizSetup(InlineVizSetupCommand {
+                check: true
+            }))
+        ));
     }
 
     #[test]

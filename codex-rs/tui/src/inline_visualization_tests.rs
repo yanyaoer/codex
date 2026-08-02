@@ -22,17 +22,24 @@ fn context_with_fragment(fragment: &str) -> (TempDir, InlineVisualizationContext
     (codex_home, context)
 }
 
-fn context_with_image(file: &str) -> (TempDir, InlineVisualizationContext) {
+fn context_with_native_image(
+    format: native::NativeArtifactFormat,
+    source: &str,
+) -> (TempDir, InlineVisualizationContext) {
     let codex_home = tempfile::tempdir().expect("temp codex home");
-    let workspace = codex_home.path().join("workspace");
-    fs::create_dir_all(&workspace).expect("create workspace");
-    image::RgbaImage::from_pixel(64, 32, image::Rgba([20, 80, 200, 255]))
-        .save_with_format(workspace.join(file), image::ImageFormat::Png)
-        .expect("write PNG");
     let mut context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
         .expect("UUIDv7 thread id should provide a timestamp");
-    context.artifact_dir = Some(workspace);
+    fs::create_dir_all(&context.thread_dir).expect("create visualization directory");
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([20, 80, 200, 255]))
+        .save_with_format(
+            context
+                .thread_dir
+                .join(native::artifact_file(format, source)),
+            image::ImageFormat::Png,
+        )
+        .expect("write native PNG");
     context.kitty_transport = Some(KittyTransport::Direct);
+    context.native_rendering_enabled = true;
     (codex_home, context)
 }
 
@@ -63,18 +70,6 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect()
-}
-
-fn render_artifact(
-    source: &str,
-    context: &InlineVisualizationContext,
-) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
-    crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations(
-        source,
-        Some(60),
-        Some(Path::new("/workspace")),
-        Some(context),
-    )
 }
 
 fn buffer_to_text(buffer: &Buffer, width: u16) -> String {
@@ -304,10 +299,14 @@ fn finalized_agent_cell_replays_visualization_link() {
 
 #[test]
 fn rich_agent_cell_replaces_adjacent_d2_artifact_without_rewriting_raw_history() {
-    let (_codex_home, context) = context_with_image("diagram.png");
-    let source = "Before\n\n```d2\ndirection: right\nuser -> agent -> tool\n```\n::codex-inline-vis{file=\"diagram.png\"}\n\nAfter\n";
+    let diagram = "direction: right\nuser -> agent -> tool\n";
+    let (_codex_home, context) =
+        context_with_native_image(native::NativeArtifactFormat::D2, diagram);
+    let source = format!(
+        "Before\n\n```d2\n{diagram}```\n::codex-inline-vis{{file=\"diagram.png\"}}\n\nAfter\n"
+    );
     let cell = AgentMarkdownCell::new_with_inline_visualizations(
-        source.to_string(),
+        source,
         Path::new("/workspace"),
         Some(context),
     );
@@ -349,11 +348,65 @@ fn rich_agent_cell_replaces_adjacent_d2_artifact_without_rewriting_raw_history()
 }
 
 #[test]
-fn rich_agent_cell_replaces_adjacent_mermaid_artifact() {
-    let (_codex_home, context) = context_with_image("sequence.png");
-    let source = "Before\n\n```mermaid\nsequenceDiagram\n  user->>agent: request\n```\n::codex-inline-vis{file=\"sequence.png\"}\n\nAfter\n";
+fn rich_agent_cell_automatically_replaces_native_d2_fence_without_rewriting_raw_history() {
+    let diagram = "direction: right\nuser -> agent -> tool\n";
+    let (_codex_home, context) =
+        context_with_native_image(native::NativeArtifactFormat::D2, diagram);
+    let source = format!("Before\n\n```d2\n{diagram}```\n\nAfter\n");
     let cell = AgentMarkdownCell::new_with_inline_visualizations(
-        source.to_string(),
+        source.clone(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rich = cell
+        .display_hyperlink_lines(/*width*/ 40)
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    "<image row; uploads PNG>".to_string()
+                } else {
+                    "<image row>".to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let raw = cell
+        .raw_lines()
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(
+        cell.display_hyperlink_lines(/*width*/ 40)
+            .iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+    assert_eq!(raw, source.trim_end());
+    insta::assert_snapshot!(
+        "native_d2_fence_renders_inline_without_history_rewrite",
+        format!("rich:\n{rich}\n\nraw:\n{raw}")
+    );
+}
+
+#[test]
+fn rich_agent_cell_replaces_adjacent_mermaid_artifact() {
+    let diagram = "sequenceDiagram\n  user->>agent: request\n";
+    let (_codex_home, context) =
+        context_with_native_image(native::NativeArtifactFormat::Mermaid, diagram);
+    let source = format!(
+        "Before\n\n```mermaid\n{diagram}```\n::codex-inline-vis{{file=\"sequence.png\"}}\n\nAfter\n"
+    );
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source,
         Path::new("/workspace"),
         Some(context),
     );
@@ -377,116 +430,6 @@ fn rich_agent_cell_replaces_adjacent_mermaid_artifact() {
         .join("\n");
 
     insta::assert_snapshot!("inline_mermaid_artifact_renders_inline", rendered);
-}
-
-#[test]
-fn standalone_png_directive_uses_the_skill_output_contract() {
-    let (_codex_home, context) = context_with_image("diagram.png");
-    let source = "Rendered and verified.\n\n::codex-inline-vis{file=\"diagram.png\"}";
-    let cell = AgentMarkdownCell::new_with_inline_visualizations(
-        source.to_string(),
-        Path::new("/workspace"),
-        Some(context),
-    );
-    let lines = cell.display_hyperlink_lines(/*width*/ 20);
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|line| line.inline_image.is_some())
-            .count(),
-        1
-    );
-    assert!(lines.iter().all(|line| line.hyperlinks.is_empty()));
-    let rendered = lines
-        .iter()
-        .map(|line| {
-            let text = line_text(&line.line);
-            if text.contains('\u{10eeee}') {
-                if line.inline_image.is_some() {
-                    "<image row; uploads PNG>".to_string()
-                } else {
-                    "<image row>".to_string()
-                }
-            } else {
-                text
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    insta::assert_snapshot!("standalone_png_directive_renders_inline", rendered);
-    assert_eq!(
-        cell.raw_lines()
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>()
-            .join("\n"),
-        source
-    );
-}
-
-#[test]
-fn rich_agent_cell_replaces_latex_and_standalone_directives() {
-    let (_codex_home, context) = context_with_image("formula.png");
-    let latex_lines = render_artifact(
-        "```latex\nE = mc^2\n```\n::codex-inline-vis{file=\"formula.png\"}",
-        &context,
-    );
-    assert_eq!(
-        latex_lines
-            .iter()
-            .filter(|line| line.inline_image.is_some())
-            .count(),
-        1
-    );
-
-    let non_adjacent = render_artifact(
-        "```d2\na -> b\n```\nExplanation.\n::codex-inline-vis{file=\"formula.png\"}",
-        &context,
-    );
-    assert_eq!(
-        non_adjacent
-            .iter()
-            .filter(|line| line.inline_image.is_some())
-            .count(),
-        1
-    );
-    let non_adjacent_text = non_adjacent
-        .iter()
-        .map(|line| line_text(&line.line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(non_adjacent_text.contains("a -> b"));
-    assert!(non_adjacent_text.contains("Explanation."));
-
-    let artifact_dir = context.artifact_dir.as_ref().expect("artifact directory");
-    fs::write(artifact_dir.join("invalid.png"), b"not a PNG").expect("write invalid PNG");
-    assert!(context.link_for("invalid.png").is_none());
-}
-
-#[test]
-fn png_artifact_root_does_not_replace_html_thread_root() {
-    let (_codex_home, mut context) = context_with_image("diagram.png");
-    let artifact_dir = context.artifact_dir.as_ref().expect("artifact directory");
-    fs::write(artifact_dir.join("chart.html"), "<div>untrusted</div>")
-        .expect("write workspace HTML");
-    assert!(context.link_for("chart.html").is_none());
-    assert!(context.link_for("diagram.png").is_some());
-
-    fs::create_dir_all(&context.thread_dir).expect("create thread directory");
-    fs::write(context.thread_dir.join("chart.html"), "<div>trusted</div>")
-        .expect("write thread HTML");
-    assert!(context.link_for("chart.html").is_some());
-
-    context.kitty_transport = None;
-    let fallback = rewrite_inline_visualizations_for_terminal(
-        "```d2\na -> b\n```\n::codex-inline-vis{file=\"diagram.png\"}",
-        Some(&context),
-        Some(60),
-    );
-    assert!(fallback.trusted_inline_images.is_empty());
-    assert_eq!(fallback.trusted_file_links.len(), 1);
-    assert!(fallback.markdown.contains("```d2"));
 }
 
 #[test]

@@ -130,6 +130,8 @@ mod hooks_rpc;
 mod ide_context;
 mod inline_image;
 mod inline_visualization;
+pub use inline_visualization::InlineVisualizationSetupReport;
+pub use inline_visualization::setup_inline_visualizations;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;

@@ -1,0 +1,29 @@
+---
+source: tui/src/inline_visualization_tests.rs
+expression: "format!(\"rich:\\n{rich}\\n\\nraw:\\n{raw}\")"
+---
+rich:
+• Before
+
+<image row; uploads PNG>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+<image row>
+
+  After
+
+raw:
+Before
+
+```d2
+direction: right
+user -> agent -> tool
+```
+
+After

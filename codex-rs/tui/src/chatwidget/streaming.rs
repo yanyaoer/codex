@@ -69,6 +69,10 @@ impl ChatWidget {
                         thread_id,
                     )
                 });
+                let native_render = inline_visualization_context
+                    .clone()
+                    .filter(|context| context.has_native_artifacts(&source))
+                    .map(|context| (context, source.clone()));
                 self.note_stream_consolidation_queued();
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
@@ -77,6 +81,14 @@ impl ChatWidget {
                     scrollback_reflow,
                     deferred_history_cell,
                 });
+                if let Some((context, source)) = native_render {
+                    let app_event_tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        if context.render_native_artifacts(&source).await > 0 {
+                            app_event_tx.send(AppEvent::InlineVisualizationsReady);
+                        }
+                    });
+                }
             }
         }
         self.adaptive_chunking.reset();

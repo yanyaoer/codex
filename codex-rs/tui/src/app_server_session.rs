@@ -2660,6 +2660,24 @@ mod tests {
             treatment_fork.developer_instructions.as_deref(),
             Some(expected.as_str())
         );
+
+        let mut artifact_config = build_config(&temp_dir).await;
+        artifact_config.developer_instructions = Some("Developer override.".to_string());
+        let _ = artifact_config.features.enable(Feature::Artifact);
+        let artifact_start = thread_start_params_from_config(
+            &artifact_config,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let expected = format!(
+            "Developer override.\n\n{}",
+            crate::terminal_visualization_instructions::INLINE_VISUALIZATION_INSTRUCTIONS
+        );
+        assert_eq!(
+            artifact_start.developer_instructions.as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     #[tokio::test]

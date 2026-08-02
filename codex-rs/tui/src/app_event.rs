@@ -761,6 +761,9 @@ pub(crate) enum AppEvent {
         deferred_history_cell: Option<Box<dyn HistoryCell>>,
     },
 
+    /// Re-render source-backed transcript cells after native artifact PNGs are materialized.
+    InlineVisualizationsReady,
+
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
     /// end of the transcript with a single source-backed `ProposedPlanCell`.
     ///
