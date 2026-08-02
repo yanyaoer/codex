@@ -1,5 +1,6 @@
 //! Render-only handling for assistant-authored inline visualization artifacts.
 
+mod formula;
 mod native;
 mod setup;
 mod viewer;
@@ -29,6 +30,8 @@ use std::ops::Range;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
 
@@ -53,6 +56,8 @@ pub(crate) struct InlineVisualizationContext {
     managed_bin_dir: PathBuf,
     kitty_transport: Option<KittyTransport>,
     native_rendering_enabled: bool,
+    formula_style: formula::FormulaStyle,
+    formula_cache: Arc<Mutex<HashMap<(String, usize), formula::PreparedFormula>>>,
 }
 
 #[derive(Debug)]
@@ -119,6 +124,8 @@ impl InlineVisualizationContext {
             managed_bin_dir: native::managed_bin_dir(codex_home),
             kitty_transport: None,
             native_rendering_enabled: false,
+            formula_style: formula::FormulaStyle::detect(),
+            formula_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -222,6 +229,44 @@ impl InlineVisualizationContext {
             image.width,
             image.height,
             available_width,
+            transport,
+        )
+    }
+
+    fn inline_image_for_artifact(
+        &self,
+        file: &str,
+        available_width: usize,
+        format: native::NativeArtifactFormat,
+    ) -> Option<InlineImage> {
+        if format != native::NativeArtifactFormat::Latex {
+            return self.inline_image_for(file, available_width);
+        }
+        let transport = self.kitty_transport?;
+        let key = (file.to_string(), available_width);
+        let prepared = self
+            .formula_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned())
+            .or_else(|| {
+                let source = self.validated_image(file)?;
+                let prepared = formula::prepare(
+                    &source.path,
+                    &self.image_cache_dir,
+                    available_width,
+                    self.formula_style,
+                )?;
+                if let Ok(mut cache) = self.formula_cache.lock() {
+                    cache.insert(key, prepared.clone());
+                }
+                Some(prepared)
+            })?;
+        InlineImage::new_with_grid(
+            prepared.path,
+            &prepared.digest,
+            prepared.columns,
+            prepared.rows,
             transport,
         )
     }
@@ -415,7 +460,9 @@ fn replace_artifact_blocks<'a>(
                 let end = adjacent_directive(markdown, range.end)
                     .map_or(range.end, |(directive_end, _)| directive_end);
                 let file = native::artifact_file(candidate.format, &candidate.source);
-                let Some(image) = context.inline_image_for(&file, available_width) else {
+                let Some(image) =
+                    context.inline_image_for_artifact(&file, available_width, candidate.format)
+                else {
                     continue;
                 };
                 replacements.push(ArtifactReplacement {

@@ -116,5 +116,12 @@ E = mc^2
             .unwrap_or_else(|error| panic!("{} should be a decoded PNG: {error}", path.display()));
         assert!(image.width() > 0);
         assert!(image.height() > 0);
+        if artifact.format == NativeArtifactFormat::Latex {
+            let rgba = image.into_rgba8();
+            assert!(rgba.width() >= 400);
+            assert!(rgba.height() >= 200);
+            assert!(rgba.pixels().any(|pixel| pixel.0[3] == 0));
+            assert!(rgba.pixels().any(|pixel| pixel.0[3] > 0));
+        }
     }
 }

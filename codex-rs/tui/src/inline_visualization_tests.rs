@@ -40,6 +40,11 @@ fn context_with_native_image(
         .expect("write native PNG");
     context.kitty_transport = Some(KittyTransport::Direct);
     context.native_rendering_enabled = true;
+    context.formula_style = formula::FormulaStyle {
+        foreground: (210, 220, 230),
+        cell_width_px: 8,
+        cell_height_px: 16,
+    };
     (codex_home, context)
 }
 
@@ -393,6 +398,56 @@ fn rich_agent_cell_automatically_replaces_native_d2_fence_without_rewriting_raw_
     assert_eq!(raw, source.trim_end());
     insta::assert_snapshot!(
         "native_d2_fence_renders_inline_without_history_rewrite",
+        format!("rich:\n{rich}\n\nraw:\n{raw}")
+    );
+}
+
+#[test]
+fn rich_agent_cell_renders_native_latex_in_formula_sized_rows() {
+    let formula = "E = mc^2\n";
+    let (_codex_home, context) =
+        context_with_native_image(native::NativeArtifactFormat::Latex, formula);
+    let source = format!("Before\n\n```latex\n{formula}```\n\nAfter\n");
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.clone(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rich = cell
+        .display_hyperlink_lines(/*width*/ 40)
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    "<formula row; uploads transparent PNG>".to_string()
+                } else {
+                    "<formula row>".to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let raw = cell
+        .raw_lines()
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(
+        cell.display_hyperlink_lines(/*width*/ 40)
+            .iter()
+            .filter(|line| line_text(&line.line).contains('\u{10eeee}'))
+            .count(),
+        4
+    );
+    assert_eq!(raw, source.trim_end());
+    insta::assert_snapshot!(
+        "native_latex_fence_uses_terminal_formula_rows_without_history_rewrite",
         format!("rich:\n{rich}\n\nraw:\n{raw}")
     );
 }

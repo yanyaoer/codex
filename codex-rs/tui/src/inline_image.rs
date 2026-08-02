@@ -91,6 +91,24 @@ impl InlineImage {
             .max(1.0)
             .min(f64::from(available_columns)) as u16;
 
+        Self::new_with_grid(path, digest, columns, rows, transport)
+    }
+
+    pub(crate) fn new_with_grid(
+        path: PathBuf,
+        digest: &[u8],
+        columns: u16,
+        rows: u16,
+        transport: KittyTransport,
+    ) -> Option<Self> {
+        if columns == 0
+            || rows == 0
+            || usize::from(columns) > DIACRITICS.len()
+            || usize::from(rows) > DIACRITICS.len()
+        {
+            return None;
+        }
+
         let id_bytes: [u8; 4] = digest.get(..4)?.try_into().ok()?;
         let image_id = u32::from_be_bytes(id_bytes).max(1);
         Some(Self {

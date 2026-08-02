@@ -54,3 +54,19 @@ fn wraps_each_command_for_nested_tmux_and_detects_supported_depths() {
         [Some(1), Some(1), Some(2), None, None]
     );
 }
+
+#[test]
+fn explicit_grid_preserves_formula_layout() {
+    let image = InlineImage::new_with_grid(
+        PathBuf::new(),
+        &[1, 2, 3, 4],
+        /*columns*/ 7,
+        /*rows*/ 4,
+        KittyTransport::Direct,
+    )
+    .expect("inline image");
+
+    assert_eq!(image.columns, 7);
+    assert_eq!(image.rows, 4);
+    assert_eq!(image.placeholder_lines().len(), 4);
+}

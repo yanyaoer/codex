@@ -27,6 +27,7 @@ use tokio::process::Command;
 use super::InlineVisualizationContext;
 
 const RENDER_POLICY_VERSION: u8 = 1;
+const LATEX_RENDER_POLICY_VERSION: u8 = 2;
 const MAX_ARTIFACTS_PER_MESSAGE: usize = 8;
 const MAX_SOURCE_BYTES: usize = 256 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 20 * 1024 * 1024;
@@ -129,7 +130,10 @@ pub(super) fn contains_artifact_blocks(markdown: &str) -> bool {
 pub(super) fn artifact_file(format: NativeArtifactFormat, source: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(b"codex-inline-viz\0");
-    digest.update([RENDER_POLICY_VERSION]);
+    digest.update([match format {
+        NativeArtifactFormat::Latex => LATEX_RENDER_POLICY_VERSION,
+        NativeArtifactFormat::D2 | NativeArtifactFormat::Mermaid => RENDER_POLICY_VERSION,
+    }]);
     digest.update(format.label());
     digest.update([0]);
     digest.update(source.as_bytes());
@@ -279,9 +283,7 @@ async fn render_artifact(
                     "--output-dir".into(),
                     output_dir.as_os_str().into(),
                     "--dpr".into(),
-                    "1".into(),
-                    "--font-size".into(),
-                    "40".into(),
+                    "4".into(),
                     "--color".into(),
                     "black".into(),
                     "--office-compatible-colors".into(),
@@ -295,21 +297,25 @@ async fn render_artifact(
         }
     }
 
+    let mut rasterizer_args = vec![
+        "--dpi-x".into(),
+        "144".into(),
+        "--dpi-y".into(),
+        "144".into(),
+        "--zoom".into(),
+        "1".into(),
+    ];
+    if artifact.format != NativeArtifactFormat::Latex {
+        rasterizer_args.extend(["--background-color".into(), "white".into()]);
+    }
+    rasterizer_args.extend([
+        "--output".into(),
+        png.as_os_str().into(),
+        svg.as_os_str().into(),
+    ]);
     run_command(
         &commands.rasterizer,
-        &[
-            "--dpi-x".into(),
-            "144".into(),
-            "--dpi-y".into(),
-            "144".into(),
-            "--zoom".into(),
-            "1".into(),
-            "--background-color".into(),
-            "white".into(),
-            "--output".into(),
-            png.as_os_str().into(),
-            svg.as_os_str().into(),
-        ],
+        &rasterizer_args,
         working.path(),
         /*use_user_home*/ false,
     )
