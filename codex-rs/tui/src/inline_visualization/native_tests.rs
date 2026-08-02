@@ -122,6 +122,54 @@ E = mc^2
             assert!(rgba.height() >= 200);
             assert!(rgba.pixels().any(|pixel| pixel.0[3] == 0));
             assert!(rgba.pixels().any(|pixel| pixel.0[3] > 0));
+            let prepared = super::super::formula::prepare(
+                &path,
+                &context.image_cache_dir,
+                /* available_width */ 80,
+                super::super::formula::FormulaStyle {
+                    foreground: (230, 230, 230),
+                    cell_width_px: 16,
+                    cell_height_px: 32,
+                },
+            )
+            .expect("prepare terminal-sized formula");
+            let display = image::open(&prepared.path).expect("decode terminal-sized formula");
+            let zoom = image::open(&prepared.open_path)
+                .expect("decode high-resolution formula")
+                .into_rgba8();
+            assert!(zoom.width() > display.width());
+            assert!(zoom.height() > display.height());
+            assert!(
+                zoom.pixels()
+                    .filter(|pixel| pixel.0[3] > 0)
+                    .all(|pixel| pixel.0[..3] == [230, 230, 230])
+            );
+        } else {
+            let prepared = super::super::diagram::prepare(
+                &path,
+                &context.image_cache_dir,
+                super::super::diagram::DiagramPalette {
+                    foreground: (230, 230, 230),
+                    background: (30, 30, 30),
+                    accent: (137, 180, 250),
+                },
+            )
+            .expect("prepare terminal-colored diagram");
+            let styled = image::open(&prepared.path)
+                .expect("decode terminal-colored diagram")
+                .into_rgba8();
+            assert_eq!(
+                (styled.width(), styled.height()),
+                (image.width(), image.height())
+            );
+            assert!(styled.pixels().any(|pixel| pixel.0[3] == 0));
+            assert!(styled.pixels().any(|pixel| pixel.0[3] > 0));
+            assert!(
+                styled
+                    .pixels()
+                    .filter(|pixel| pixel.0[3] > 0)
+                    .all(|pixel| pixel.0[..3] != [255, 255, 255])
+            );
         }
     }
 }

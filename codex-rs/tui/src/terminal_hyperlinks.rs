@@ -52,6 +52,15 @@ impl TerminalHyperlink {
         }
     }
 
+    pub(crate) fn trusted_file(columns: Range<usize>, destination: &Url) -> Self {
+        debug_assert_eq!(destination.scheme(), "file");
+        Self {
+            columns,
+            destination: destination.to_string(),
+            destination_kind: DestinationKind::TrustedFile,
+        }
+    }
+
     pub(crate) fn retarget_to_trusted_file(&mut self, destination: &Url) {
         // Keep file URLs out of the general Markdown link path. Only generated visualization links
         // are promoted to this destination kind.

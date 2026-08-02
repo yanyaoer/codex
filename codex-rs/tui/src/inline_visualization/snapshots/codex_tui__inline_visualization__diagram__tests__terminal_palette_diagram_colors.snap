@@ -1,0 +1,8 @@
+---
+source: tui/src/inline_visualization/diagram_tests.rs
+expression: "format!(\"background={:?}\\nsurface={:?}\\nforeground={:?}\\naccent={:?}\",\noutput.get_pixel(0, 0).0, output.get_pixel(1, 1).0, output.get_pixel(2, 1).0,\noutput.get_pixel(3, 1).0,)"
+---
+background=[0, 0, 0, 0]
+surface=[50, 50, 50, 255]
+foreground=[230, 230, 230, 255]
+accent=[137, 180, 250, 255]

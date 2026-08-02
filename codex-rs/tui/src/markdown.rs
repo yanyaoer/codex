@@ -19,6 +19,7 @@
 //! buffers the entire fence body before deciding, only unwraps fences whose
 //! info string is `md` or `markdown` AND whose body contains a
 //! header+delimiter pair, and degrades gracefully on unclosed fences.
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::borrow::Cow;
 use std::ops::Range;
@@ -28,6 +29,7 @@ use crate::inline_visualization::InlineVisualizationContext;
 use crate::inline_visualization::rewrite_inline_visualizations_for_terminal;
 use crate::table_detect;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 
 /// Render markdown source to styled ratatui lines and append them to `lines`.
 ///
@@ -124,11 +126,20 @@ pub(crate) fn render_markdown_agent_with_links_cwd_and_visualizations(
             rendered.push(line);
             continue;
         };
-        for (index, placeholder) in image.placeholder_lines().into_iter().enumerate() {
+        for (index, placeholder) in image.image.placeholder_lines().into_iter().enumerate() {
             let mut line = HyperlinkLine::new(placeholder);
             if index == 0 {
-                line.inline_image = Some(image.clone());
+                line.inline_image = Some(image.image.clone());
             }
+            rendered.push(line);
+        }
+        if let Some(destination) = image.open_destination {
+            let label = "[open/zoom]";
+            let mut line = HyperlinkLine::new(Line::from(label.cyan().underlined()));
+            line.hyperlinks.push(TerminalHyperlink::trusted_file(
+                0..label.len(),
+                &destination,
+            ));
             rendered.push(line);
         }
     }

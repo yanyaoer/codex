@@ -1,20 +1,12 @@
 //! Terminal-aware preparation for transparent LaTeX images.
 
-use image::DynamicImage;
 use image::GrayImage;
-use image::ImageFormat;
 use image::Luma;
 use image::Rgba;
 use image::RgbaImage;
 use image::imageops::FilterType;
-use sha2::Digest as _;
-use sha2::Sha256;
-use std::fs;
-use std::io::Cursor;
-use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 
 const MIN_FORMULA_ROWS: u16 = 3;
 const MAX_FORMULA_ROWS: u16 = 6;
@@ -60,6 +52,7 @@ impl FormulaStyle {
 #[derive(Clone, Debug)]
 pub(super) struct PreparedFormula {
     pub(super) path: PathBuf,
+    pub(super) open_path: PathBuf,
     pub(super) digest: [u8; 32],
     pub(super) columns: u16,
     pub(super) rows: u16,
@@ -88,6 +81,7 @@ pub(super) fn prepare(
     let coverage = GrayImage::from_fn(right - left, bottom - top, |x, y| {
         Luma([source.get_pixel(left + x, top + y).0[3]])
     });
+    let zoom = super::png_cache::persist(recolor_coverage(&coverage, style.foreground), cache_dir)?;
     let plan = formula_plan(coverage.width(), coverage.height(), available_width, style)?;
     let resized = image::imageops::resize(
         &coverage,
@@ -96,46 +90,26 @@ pub(super) fn prepare(
         FilterType::Lanczos3,
     );
     let mut canvas = RgbaImage::new(plan.canvas_width_px, plan.canvas_height_px);
-    for (x, y, alpha) in resized.enumerate_pixels() {
-        let alpha = enhance_alpha(alpha.0[0]);
-        if alpha == 0 {
+    for (x, y, pixel) in recolor_coverage(&resized, style.foreground).enumerate_pixels() {
+        if pixel.0[3] == 0 {
             continue;
         }
-        let (red, green, blue) = style.foreground;
-        canvas.put_pixel(
-            plan.content_x_px + x,
-            plan.content_y_px + y,
-            Rgba([red, green, blue, alpha]),
-        );
+        canvas.put_pixel(plan.content_x_px + x, plan.content_y_px + y, *pixel);
     }
-
-    let mut bytes = Vec::new();
-    DynamicImage::ImageRgba8(canvas)
-        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-        .ok()?;
-    let digest: [u8; 32] = Sha256::digest(&bytes).into();
-    fs::create_dir_all(cache_dir).ok()?;
-    let path = cache_dir.join(format!("{:x}.png", Sha256::digest(&bytes)));
-    if path.is_file() {
-        if fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
-            return None;
-        }
-    } else {
-        let mut staged = NamedTempFile::new_in(cache_dir).ok()?;
-        staged.write_all(&bytes).ok()?;
-        staged.flush().ok()?;
-        if let Err(error) = staged.persist_noclobber(&path)
-            && (error.error.kind() != std::io::ErrorKind::AlreadyExists
-                || fs::read(&path).ok().as_deref() != Some(bytes.as_slice()))
-        {
-            return None;
-        }
-    }
+    let display = super::png_cache::persist(canvas, cache_dir)?;
     Some(PreparedFormula {
-        path,
-        digest,
+        path: display.path,
+        open_path: zoom.path,
+        digest: display.digest,
         columns: plan.columns,
         rows: plan.rows,
+    })
+}
+
+fn recolor_coverage(coverage: &GrayImage, foreground: (u8, u8, u8)) -> RgbaImage {
+    RgbaImage::from_fn(coverage.width(), coverage.height(), |x, y| {
+        let alpha = enhance_alpha(coverage.get_pixel(x, y).0[0]);
+        Rgba([foreground.0, foreground.1, foreground.2, alpha])
     })
 }
 

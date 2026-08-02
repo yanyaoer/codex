@@ -1,7 +1,9 @@
 //! Render-only handling for assistant-authored inline visualization artifacts.
 
+mod diagram;
 mod formula;
 mod native;
+mod png_cache;
 mod setup;
 mod viewer;
 
@@ -56,6 +58,8 @@ pub(crate) struct InlineVisualizationContext {
     managed_bin_dir: PathBuf,
     kitty_transport: Option<KittyTransport>,
     native_rendering_enabled: bool,
+    diagram_palette: diagram::DiagramPalette,
+    diagram_cache: Arc<Mutex<HashMap<String, png_cache::CachedPng>>>,
     formula_style: formula::FormulaStyle,
     formula_cache: Arc<Mutex<HashMap<(String, usize), formula::PreparedFormula>>>,
 }
@@ -66,6 +70,20 @@ struct ValidatedImage {
     digest: [u8; 32],
     width: u32,
     height: u32,
+}
+
+struct PreparedInlineImage {
+    image: InlineImage,
+    open_path: PathBuf,
+}
+
+impl PreparedInlineImage {
+    fn into_trusted(self) -> TrustedInlineImage {
+        TrustedInlineImage {
+            image: self.image,
+            open_destination: Url::from_file_path(self.open_path).ok(),
+        }
+    }
 }
 
 impl InlineVisualizationContext {
@@ -124,6 +142,8 @@ impl InlineVisualizationContext {
             managed_bin_dir: native::managed_bin_dir(codex_home),
             kitty_transport: None,
             native_rendering_enabled: false,
+            diagram_palette: diagram::DiagramPalette::detect(),
+            diagram_cache: Arc::new(Mutex::new(HashMap::new())),
             formula_style: formula::FormulaStyle::detect(),
             formula_cache: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -220,17 +240,19 @@ impl InlineVisualizationContext {
         })
     }
 
-    fn inline_image_for(&self, file: &str, available_width: usize) -> Option<InlineImage> {
+    fn inline_image_for(&self, file: &str, available_width: usize) -> Option<PreparedInlineImage> {
         let transport = self.kitty_transport?;
         let image = self.validated_image(file)?;
-        InlineImage::new(
+        let open_path = image.path.clone();
+        let image = InlineImage::new(
             image.path,
             &image.digest,
             image.width,
             image.height,
             available_width,
             transport,
-        )
+        )?;
+        Some(PreparedInlineImage { image, open_path })
     }
 
     fn inline_image_for_artifact(
@@ -238,37 +260,71 @@ impl InlineVisualizationContext {
         file: &str,
         available_width: usize,
         format: native::NativeArtifactFormat,
-    ) -> Option<InlineImage> {
-        if format != native::NativeArtifactFormat::Latex {
-            return self.inline_image_for(file, available_width);
-        }
+    ) -> Option<PreparedInlineImage> {
         let transport = self.kitty_transport?;
-        let key = (file.to_string(), available_width);
-        let prepared = self
-            .formula_cache
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(&key).cloned())
-            .or_else(|| {
-                let source = self.validated_image(file)?;
-                let prepared = formula::prepare(
-                    &source.path,
-                    &self.image_cache_dir,
+        match format {
+            native::NativeArtifactFormat::D2 | native::NativeArtifactFormat::Mermaid => {
+                let prepared = self
+                    .diagram_cache
+                    .lock()
+                    .ok()
+                    .and_then(|cache| cache.get(file).cloned())
+                    .or_else(|| {
+                        let source = self.validated_image(file)?;
+                        let prepared = diagram::prepare(
+                            &source.path,
+                            &self.image_cache_dir,
+                            self.diagram_palette,
+                        )?;
+                        if let Ok(mut cache) = self.diagram_cache.lock() {
+                            cache.insert(file.to_string(), prepared.clone());
+                        }
+                        Some(prepared)
+                    })?;
+                let open_path = prepared.path.clone();
+                let image = InlineImage::new(
+                    prepared.path,
+                    &prepared.digest,
+                    prepared.width,
+                    prepared.height,
                     available_width,
-                    self.formula_style,
+                    transport,
                 )?;
-                if let Ok(mut cache) = self.formula_cache.lock() {
-                    cache.insert(key, prepared.clone());
-                }
-                Some(prepared)
-            })?;
-        InlineImage::new_with_grid(
-            prepared.path,
-            &prepared.digest,
-            prepared.columns,
-            prepared.rows,
-            transport,
-        )
+                Some(PreparedInlineImage { image, open_path })
+            }
+            native::NativeArtifactFormat::Latex => {
+                let key = (file.to_string(), available_width);
+                let prepared = self
+                    .formula_cache
+                    .lock()
+                    .ok()
+                    .and_then(|cache| cache.get(&key).cloned())
+                    .or_else(|| {
+                        let source = self.validated_image(file)?;
+                        let prepared = formula::prepare(
+                            &source.path,
+                            &self.image_cache_dir,
+                            available_width,
+                            self.formula_style,
+                        )?;
+                        if let Ok(mut cache) = self.formula_cache.lock() {
+                            cache.insert(key, prepared.clone());
+                        }
+                        Some(prepared)
+                    })?;
+                let image = InlineImage::new_with_grid(
+                    prepared.path,
+                    &prepared.digest,
+                    prepared.columns,
+                    prepared.rows,
+                    transport,
+                )?;
+                Some(PreparedInlineImage {
+                    image,
+                    open_path: prepared.open_path,
+                })
+            }
+        }
     }
 
     pub(crate) fn has_native_artifacts(&self, markdown: &str) -> bool {
@@ -308,7 +364,12 @@ fn is_visualization_thread_dir(visualizations_dir: &Path, path: &Path) -> bool {
 pub(crate) struct InlineVisualizationRewrite<'a> {
     pub(crate) markdown: Cow<'a, str>,
     pub(crate) trusted_file_links: HashMap<String, TrustedFileLink>,
-    pub(crate) trusted_inline_images: HashMap<String, InlineImage>,
+    pub(crate) trusted_inline_images: HashMap<String, TrustedInlineImage>,
+}
+
+pub(crate) struct TrustedInlineImage {
+    pub(crate) image: InlineImage,
+    pub(crate) open_destination: Option<Url>,
 }
 
 pub(crate) struct TrustedFileLink {
@@ -350,15 +411,21 @@ fn rewrite_inline_visualizations_impl<'a>(
         };
     }
 
-    let (markdown, mut trusted_inline_images) = match (context, available_width) {
+    let artifact_rewrite = match (context, available_width) {
         (Some(context), Some(available_width)) => {
             replace_artifact_blocks(markdown, context, available_width)
         }
-        _ => (Cow::Borrowed(markdown), HashMap::new()),
+        _ => InlineVisualizationRewrite {
+            markdown: Cow::Borrowed(markdown),
+            trusted_file_links: HashMap::new(),
+            trusted_inline_images: HashMap::new(),
+        },
     };
+    let markdown = artifact_rewrite.markdown;
+    let mut trusted_inline_images = artifact_rewrite.trusted_inline_images;
     let code_block_ranges = code_block_ranges(&markdown);
     let mut rewritten = String::with_capacity(markdown.len());
-    let mut trusted_file_links = HashMap::new();
+    let mut trusted_file_links = artifact_rewrite.trusted_file_links;
     let mut source_offset = 0;
     for source_line in markdown.split_inclusive('\n') {
         let line_start = source_offset;
@@ -373,12 +440,12 @@ fn rewrite_inline_visualizations_impl<'a>(
         if is_code || !trimmed.starts_with(DIRECTIVE_PREFIX) {
             rewritten.push_str(line);
         } else if let Some(file) = parse_directive_file(trimmed) {
-            if let Some(image) = available_width
+            if let Some(prepared) = available_width
                 .and_then(|width| context.and_then(|context| context.inline_image_for(file, width)))
             {
                 let marker = image_placeholder();
                 rewritten.push_str(&format!("```{MARKDOWN_LANGUAGE}\n{marker}\n```"));
-                trusted_inline_images.insert(marker, image);
+                trusted_inline_images.insert(marker, prepared.into_trusted());
             } else if let Some(destination) = context.and_then(|context| context.link_for(file)) {
                 let placeholder = link_placeholder();
                 let (markdown_label, display_label) = visualization_link_labels(file);
@@ -413,7 +480,7 @@ fn rewrite_inline_visualizations_impl<'a>(
 struct ArtifactReplacement {
     range: Range<usize>,
     marker: String,
-    image: InlineImage,
+    image: TrustedInlineImage,
 }
 
 struct ArtifactCandidate {
@@ -426,7 +493,7 @@ fn replace_artifact_blocks<'a>(
     markdown: &'a str,
     context: &InlineVisualizationContext,
     available_width: usize,
-) -> (Cow<'a, str>, HashMap<String, InlineImage>) {
+) -> InlineVisualizationRewrite<'a> {
     let mut replacements = Vec::new();
     let mut container_depth = 0usize;
     let mut candidate = None;
@@ -460,7 +527,7 @@ fn replace_artifact_blocks<'a>(
                 let end = adjacent_directive(markdown, range.end)
                     .map_or(range.end, |(directive_end, _)| directive_end);
                 let file = native::artifact_file(candidate.format, &candidate.source);
-                let Some(image) =
+                let Some(prepared) =
                     context.inline_image_for_artifact(&file, available_width, candidate.format)
                 else {
                     continue;
@@ -468,14 +535,18 @@ fn replace_artifact_blocks<'a>(
                 replacements.push(ArtifactReplacement {
                     range: candidate.start..end,
                     marker: image_placeholder(),
-                    image,
+                    image: prepared.into_trusted(),
                 });
             }
             _ => {}
         }
     }
     if replacements.is_empty() {
-        return (Cow::Borrowed(markdown), HashMap::new());
+        return InlineVisualizationRewrite {
+            markdown: Cow::Borrowed(markdown),
+            trusted_file_links: HashMap::new(),
+            trusted_inline_images: HashMap::new(),
+        };
     }
 
     let mut rewritten = String::with_capacity(markdown.len());
@@ -489,14 +560,19 @@ fn replace_artifact_blocks<'a>(
             Default::default()
         };
         rewritten.push_str(&format!(
-            "```{MARKDOWN_LANGUAGE}\n{}\n```{newline}",
+            "```{MARKDOWN_LANGUAGE}\n{}\n```",
             replacement.marker
         ));
+        rewritten.push_str(newline);
         source_offset = replacement.range.end;
         images.insert(replacement.marker, replacement.image);
     }
     rewritten.push_str(&markdown[source_offset..]);
-    (Cow::Owned(rewritten), images)
+    InlineVisualizationRewrite {
+        markdown: Cow::Owned(rewritten),
+        trusted_file_links: HashMap::new(),
+        trusted_inline_images: images,
+    }
 }
 
 fn is_artifact_language(language: &str) -> bool {

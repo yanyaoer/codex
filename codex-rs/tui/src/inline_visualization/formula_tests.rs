@@ -44,8 +44,19 @@ fn preparation_crops_alpha_recolors_and_preserves_transparency() {
     let output = image::open(&prepared.path)
         .expect("decode prepared formula")
         .into_rgba8();
+    let zoom = image::open(&prepared.open_path)
+        .expect("decode zoom formula")
+        .into_rgba8();
     let bounds = alpha_bounds(&output).expect("visible formula");
 
+    assert_ne!(prepared.path, prepared.open_path);
+    assert_eq!((zoom.width(), zoom.height()), (14, 8));
+    assert_eq!(alpha_bounds(&zoom), Some((0, 0, 14, 8)));
+    assert!(
+        zoom.pixels()
+            .filter(|pixel| pixel.0[3] > 0)
+            .all(|pixel| pixel.0[..3] == [12, 34, 56])
+    );
     assert!((MIN_FORMULA_ROWS..=MAX_FORMULA_ROWS).contains(&prepared.rows));
     assert_eq!(output.width(), u32::from(prepared.columns) * 8);
     assert_eq!(output.height(), u32::from(prepared.rows) * 16);

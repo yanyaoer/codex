@@ -414,8 +414,23 @@ fn rich_agent_cell_renders_native_latex_in_formula_sized_rows() {
         Some(context),
     );
 
-    let rich = cell
-        .display_hyperlink_lines(/*width*/ 40)
+    let rendered_lines = cell.display_hyperlink_lines(/*width*/ 40);
+    let zoom_link = rendered_lines
+        .iter()
+        .find(|line| line_text(&line.line).contains("[open/zoom]"))
+        .expect("zoom link directly below formula");
+    let zoom_span = zoom_link
+        .line
+        .spans
+        .iter()
+        .find(|span| span.content == "[open/zoom]")
+        .expect("styled zoom label");
+    assert_eq!(zoom_span.style, Style::new().cyan().underlined());
+    assert_eq!(zoom_link.hyperlinks.len(), 1);
+    let zoom_url = url::Url::parse(&zoom_link.hyperlinks[0].destination).expect("file URL");
+    assert_eq!(zoom_url.scheme(), "file");
+    assert!(zoom_url.to_file_path().expect("local zoom path").is_file());
+    let rich = rendered_lines
         .iter()
         .map(|line| {
             let text = line_text(&line.line);
@@ -439,7 +454,7 @@ fn rich_agent_cell_renders_native_latex_in_formula_sized_rows() {
         .join("\n");
 
     assert_eq!(
-        cell.display_hyperlink_lines(/*width*/ 40)
+        rendered_lines
             .iter()
             .filter(|line| line_text(&line.line).contains('\u{10eeee}'))
             .count(),
