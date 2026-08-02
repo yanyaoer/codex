@@ -22,6 +22,20 @@ fn context_with_fragment(fragment: &str) -> (TempDir, InlineVisualizationContext
     (codex_home, context)
 }
 
+fn context_with_image(file: &str) -> (TempDir, InlineVisualizationContext) {
+    let codex_home = tempfile::tempdir().expect("temp codex home");
+    let workspace = codex_home.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([20, 80, 200, 255]))
+        .save_with_format(workspace.join(file), image::ImageFormat::Png)
+        .expect("write PNG");
+    let mut context = InlineVisualizationContext::new(codex_home.path(), ThreadId::new())
+        .expect("UUIDv7 thread id should provide a timestamp");
+    context.artifact_dir = Some(workspace);
+    context.kitty_transport = Some(KittyTransport::Direct);
+    (codex_home, context)
+}
+
 #[test]
 fn granted_visualization_root_overrides_thread_id_derived_root() {
     let codex_home = tempfile::tempdir().expect("temp codex home");
@@ -49,6 +63,18 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect()
+}
+
+fn render_artifact(
+    source: &str,
+    context: &InlineVisualizationContext,
+) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+    crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations(
+        source,
+        Some(60),
+        Some(Path::new("/workspace")),
+        Some(context),
+    )
 }
 
 fn buffer_to_text(buffer: &Buffer, width: u16) -> String {
@@ -274,6 +300,103 @@ fn finalized_agent_cell_replays_visualization_link() {
             .iter()
             .all(|destination| destination.starts_with("file://"))
     );
+}
+
+#[test]
+fn rich_agent_cell_replaces_adjacent_d2_artifact_without_rewriting_raw_history() {
+    let (_codex_home, context) = context_with_image("diagram.png");
+    let source = "Before\n\n```d2\ndirection: right\nuser -> agent -> tool\n```\n::codex-inline-vis{file=\"diagram.png\"}\n\nAfter\n";
+    let cell = AgentMarkdownCell::new_with_inline_visualizations(
+        source.to_string(),
+        Path::new("/workspace"),
+        Some(context),
+    );
+
+    let rich = cell.display_hyperlink_lines(/*width*/ 40);
+    assert_eq!(
+        rich.iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+    let rich = rich
+        .iter()
+        .map(|line| {
+            let text = line_text(&line.line);
+            if text.contains('\u{10eeee}') {
+                if line.inline_image.is_some() {
+                    "<image row; uploads PNG>".to_string()
+                } else {
+                    "<image row>".to_string()
+                }
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let raw = cell
+        .raw_lines()
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(
+        "inline_d2_rich_render_preserves_raw_history",
+        format!("rich:\n{rich}\n\nraw:\n{raw}")
+    );
+}
+
+#[test]
+fn rich_agent_cell_replaces_latex_but_not_non_adjacent_or_invalid_artifacts() {
+    let (_codex_home, context) = context_with_image("formula.png");
+    let latex_lines = render_artifact(
+        "```latex\nE = mc^2\n```\n::codex-inline-vis{file=\"formula.png\"}",
+        &context,
+    );
+    assert_eq!(
+        latex_lines
+            .iter()
+            .filter(|line| line.inline_image.is_some())
+            .count(),
+        1
+    );
+
+    let non_adjacent = render_artifact(
+        "```d2\na -> b\n```\nExplanation.\n::codex-inline-vis{file=\"formula.png\"}",
+        &context,
+    );
+    assert!(non_adjacent.iter().all(|line| line.inline_image.is_none()));
+
+    let artifact_dir = context.artifact_dir.as_ref().expect("artifact directory");
+    fs::write(artifact_dir.join("invalid.png"), b"not a PNG").expect("write invalid PNG");
+    assert!(context.link_for("invalid.png").is_none());
+}
+
+#[test]
+fn png_artifact_root_does_not_replace_html_thread_root() {
+    let (_codex_home, mut context) = context_with_image("diagram.png");
+    let artifact_dir = context.artifact_dir.as_ref().expect("artifact directory");
+    fs::write(artifact_dir.join("chart.html"), "<div>untrusted</div>")
+        .expect("write workspace HTML");
+    assert!(context.link_for("chart.html").is_none());
+    assert!(context.link_for("diagram.png").is_some());
+
+    fs::create_dir_all(&context.thread_dir).expect("create thread directory");
+    fs::write(context.thread_dir.join("chart.html"), "<div>trusted</div>")
+        .expect("write thread HTML");
+    assert!(context.link_for("chart.html").is_some());
+
+    context.kitty_transport = None;
+    let fallback = rewrite_inline_visualizations_for_terminal(
+        "```d2\na -> b\n```\n::codex-inline-vis{file=\"diagram.png\"}",
+        Some(&context),
+        Some(60),
+    );
+    assert!(fallback.trusted_inline_images.is_empty());
+    assert_eq!(fallback.trusted_file_links.len(), 1);
+    assert!(fallback.markdown.contains("```d2"));
 }
 
 #[test]
