@@ -92,7 +92,14 @@ impl FromStr for ProtocolSelection {
 
 pub(crate) fn detect_image_support() -> ImageSupport {
     if tmux_env_is_active() {
-        return ImageSupport::Unsupported(ImageUnsupportedReason::Tmux);
+        let info = terminal_info();
+        return if tmux_allows_passthrough()
+            && tmux_kitty_passthrough_depth(&info, nested_kitty_terminal_hint()).is_some()
+        {
+            ImageSupport::Supported(ImageProtocol::Kitty)
+        } else {
+            ImageSupport::Unsupported(ImageUnsupportedReason::Tmux)
+        };
     }
 
     if env::var_os("ZELLIJ").is_some()
@@ -131,6 +138,33 @@ fn has_direct_terminal_fingerprint(term_program: Option<&str>, term: Option<&str
     ["ghostty", "kitty", "wezterm"].into_iter().any(|terminal| {
         terminal_field_contains(term_program, terminal) && terminal_field_contains(term, terminal)
     })
+}
+
+fn tmux_allows_passthrough() -> bool {
+    std::process::Command::new("tmux")
+        .args(["show-options", "-gv", "allow-passthrough"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|value| matches!(value.trim(), "on" | "all"))
+}
+
+fn nested_kitty_terminal_hint() -> bool {
+    env::var_os("KITTY_WINDOW_ID").is_some()
+        || env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
+        || env::var_os("WEZTERM_EXECUTABLE").is_some()
+        || env::var_os("WEZTERM_VERSION").is_some()
+}
+
+fn tmux_kitty_passthrough_depth(info: &TerminalInfo, nested_kitty_terminal: bool) -> Option<usize> {
+    if supports_kitty_graphics(info) {
+        return Some(1);
+    }
+
+    let nested_tmux_client = terminal_field_contains(info.term_program.as_deref(), "tmux")
+        && terminal_field_contains(info.term.as_deref(), "tmux");
+    (nested_tmux_client && nested_kitty_terminal).then_some(2)
 }
 
 fn image_support_for_terminal(info: &TerminalInfo) -> ImageSupport {
@@ -279,8 +313,25 @@ fn wrap_for_tmux_if_needed(command: &str) -> String {
         return command.to_string();
     }
 
-    let escaped = command.replace(ESC, "\x1b\x1b");
-    format!("{ESC}Ptmux;{escaped}{ST}")
+    let depth =
+        tmux_kitty_passthrough_depth(&terminal_info(), nested_kitty_terminal_hint()).unwrap_or(1);
+    wrap_for_tmux(command, depth)
+}
+
+fn wrap_for_tmux(command: &str, depth: usize) -> String {
+    command
+        .split_inclusive(ST)
+        .map(|command| wrap_tmux_command(command, depth))
+        .collect()
+}
+
+fn wrap_tmux_command(command: &str, depth: usize) -> String {
+    let mut wrapped = command.to_string();
+    for _ in 0..depth {
+        let escaped = wrapped.replace(ESC, "\x1b\x1b");
+        wrapped = format!("{ESC}Ptmux;{escaped}{ST}");
+    }
+    wrapped
 }
 
 pub fn sixel_frame(frame_path: &Path, cache_dir: &Path, height_px: u16) -> Result<PathBuf> {
@@ -360,15 +411,18 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn tmux_passthrough_wraps_and_escapes_control_sequence() {
-        let _guard = EnvVarGuard::new("TMUX", Some("session"));
-        let _term_program = EnvVarGuard::new("TERM_PROGRAM", Some("tmux"));
-        let _term = EnvVarGuard::new("TERM", Some("tmux-256color"));
+    fn tmux_passthrough_wraps_each_graphics_command_and_nesting_layer() {
         assert_eq!(
-            wrap_for_tmux_if_needed("\x1b_Gx;\x1b\\"),
+            wrap_for_tmux("\x1b_Gx;\x1b\\", 1),
             "\x1bPtmux;\x1b\x1b_Gx;\x1b\x1b\\\x1b\\"
         );
+
+        let chunks = wrap_for_tmux("\x1b_Gm=1;AAAA\x1b\\\x1b_Gm=0;BBBB\x1b\\", 1);
+        assert_eq!(chunks.matches("\x1bPtmux;").count(), 2);
+
+        let nested = wrap_for_tmux("\x1b_Gx;\x1b\\", 2);
+        assert_eq!(nested.matches("\x1bPtmux;").count(), 2);
+        assert!(nested.ends_with("\x1b\\"));
     }
 
     #[test]
@@ -389,14 +443,44 @@ mod tests {
 
     #[test]
     #[serial]
-    fn auto_protocol_is_disabled_inside_tmux() {
+    fn auto_protocol_is_disabled_inside_tmux_without_a_compatible_client() {
         let _guard = EnvVarGuard::new("TMUX", Some("session"));
+        let _tmux_pane = EnvVarGuard::new("TMUX_PANE", /*value*/ None);
         let _term_program = EnvVarGuard::new("TERM_PROGRAM", Some("tmux"));
         let _term = EnvVarGuard::new("TERM", Some("tmux-256color"));
+        let _kitty = EnvVarGuard::new("KITTY_WINDOW_ID", /*value*/ None);
+        let _ghostty = EnvVarGuard::new("GHOSTTY_RESOURCES_DIR", /*value*/ None);
+        let _wezterm = EnvVarGuard::new("WEZTERM_EXECUTABLE", /*value*/ None);
+        let _wezterm_version = EnvVarGuard::new("WEZTERM_VERSION", /*value*/ None);
 
         assert_eq!(
             ProtocolSelection::Auto.resolve(),
             ImageSupport::Unsupported(ImageUnsupportedReason::Tmux)
+        );
+    }
+
+    #[test]
+    fn tmux_kitty_passthrough_depth_handles_one_nested_tmux_client() {
+        let direct = terminal_info_for_test(
+            TerminalName::Kitty,
+            Some(Multiplexer::Tmux { version: None }),
+            Some("kitty"),
+            Some("xterm-kitty"),
+        );
+        let nested = terminal_info_for_test(
+            TerminalName::Unknown,
+            Some(Multiplexer::Tmux { version: None }),
+            Some("tmux"),
+            Some("tmux-256color"),
+        );
+
+        assert_eq!(
+            [
+                tmux_kitty_passthrough_depth(&direct, /*nested_kitty_terminal*/ false),
+                tmux_kitty_passthrough_depth(&nested, /*nested_kitty_terminal*/ true),
+                tmux_kitty_passthrough_depth(&nested, /*nested_kitty_terminal*/ false),
+            ],
+            [Some(1), Some(2), None]
         );
     }
 
