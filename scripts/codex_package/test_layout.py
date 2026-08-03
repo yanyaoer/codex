@@ -146,9 +146,7 @@ class PackageLayoutTest(unittest.TestCase):
 
             self.assertTrue(
                 (
-                    package_dir
-                    / "codex-resources"
-                    / "codex-inline-viz-renderer.exe"
+                    package_dir / "codex-resources" / "codex-inline-viz-renderer.exe"
                 ).is_file()
             )
 

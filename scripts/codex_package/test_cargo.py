@@ -113,9 +113,7 @@ class SourceBinariesForTargetTest(unittest.TestCase):
             root = Path(temp_dir)
             entrypoint = touch_file(root / "codex.exe")
             code_mode_host = touch_file(root / "codex-code-mode-host.exe")
-            inline_viz_renderer = touch_file(
-                root / "codex-inline-viz-renderer.exe"
-            )
+            inline_viz_renderer = touch_file(root / "codex-inline-viz-renderer.exe")
             command_runner = touch_file(root / "codex-command-runner.exe")
             sandbox_setup = touch_file(root / "codex-windows-sandbox-setup.exe")
 

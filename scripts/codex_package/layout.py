@@ -148,8 +148,7 @@ def validate_package_dir(
 
     if variant.name == "codex":
         renderer_path = (
-            Path("codex-resources")
-            / f"codex-inline-viz-renderer{spec.exe_suffix}"
+            Path("codex-resources") / f"codex-inline-viz-renderer{spec.exe_suffix}"
         )
         required_files.append(renderer_path)
         executable_files.append(renderer_path)
