@@ -230,7 +230,8 @@ async fn render_artifact(
             .take()
             .context("open inline visualization renderer stdin")?;
         stdin.write_all(artifact.source.as_bytes()).await?;
-        stdin.shutdown().await?;
+        // The sidecar reads its source to EOF, so close the pipe before waiting for it to exit.
+        drop(stdin);
         child.wait().await.map_err(anyhow::Error::from)
     })
     .await;

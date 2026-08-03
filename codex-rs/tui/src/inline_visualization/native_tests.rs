@@ -78,7 +78,7 @@ async fn helper_output_is_validated_and_atomically_persisted() {
     fs::write(
         &helper,
         format!(
-            "#!/bin/sh\noutput=\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output ]; then output=$2; shift 2; else shift; fi\ndone\n/bin/cp '{}' \"$output\"\n",
+            "#!/bin/sh\noutput=\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output ]; then output=$2; shift 2; else shift; fi\ndone\n/bin/cat >/dev/null\n/bin/cp '{}' \"$output\"\n",
             fixture.display()
         ),
     )
@@ -90,11 +90,14 @@ async fn helper_output_is_validated_and_atomically_persisted() {
     fs::set_permissions(&helper, permissions).expect("make helper executable");
     let artifact = artifact(NativeArtifactFormat::Mermaid, "flowchart LR\na --> b\n");
 
-    assert!(
-        render_artifact(directory.path(), &helper, &artifact)
-            .await
-            .expect("render artifact")
-    );
+    let created = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        render_artifact(directory.path(), &helper, &artifact),
+    )
+    .await
+    .expect("renderer should receive EOF")
+    .expect("render artifact");
+    assert!(created);
     assert!(
         !render_artifact(directory.path(), &helper, &artifact)
             .await
